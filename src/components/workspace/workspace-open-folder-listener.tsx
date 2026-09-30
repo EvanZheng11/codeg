@@ -4,7 +4,7 @@ import { useEffect, useRef } from "react"
 import { useTranslations } from "next-intl"
 import { toast } from "sonner"
 import { useAppWorkspaceStore } from "@/stores/app-workspace-store"
-import { useTabActions } from "@/contexts/tab-context"
+import { useTabActions, useTabStore } from "@/contexts/tab-context"
 import { useWorkbenchRoute } from "@/contexts/workbench-route-context"
 import { detectPlatform } from "@/hooks/use-platform"
 import { isRemoteDesktopMode } from "@/lib/transport"
@@ -18,6 +18,9 @@ import {
 import { toErrorMessage } from "@/lib/app-error"
 import type { FolderDetail } from "@/lib/types"
 
+const FINDER_RETRY_DELAY_MS = 50
+const FINDER_MAX_RETRIES = 3
+
 /**
  * 处理项目启动器和 macOS Finder 打开的目录：更新本窗口工作区，创建未发送
  * 会话草稿并聚焦。Finder 事件只绑定本机 macOS 桌面窗口，不读取远程工作区。
@@ -27,12 +30,33 @@ export function WorkspaceOpenFolderListener() {
   const { openNewConversationTab } = useTabActions()
   const { openConversations } = useWorkbenchRoute()
   const openFolder = useAppWorkspaceStore((state) => state.openFolder)
+  const foldersHydrated = useAppWorkspaceStore((state) => state.foldersHydrated)
+  const tabsHydrated = useTabStore((state) => state.tabsHydrated)
   const finderLifecycle = useRef<{
     started: boolean
     disposed: boolean
     unlisten?: () => void
     cleanupTimer?: ReturnType<typeof setTimeout>
-  }>({ started: false, disposed: false })
+    retryTimer?: ReturnType<typeof setTimeout>
+    subscribed: boolean
+    subscribing: boolean
+    consuming: boolean
+    pendingReady: boolean
+    listenRetries: number
+    consumeRetries: number
+    kick?: () => void
+  }>({
+    started: false,
+    disposed: false,
+    subscribed: false,
+    subscribing: false,
+    consuming: false,
+    pendingReady: false,
+    listenRetries: 0,
+    consumeRetries: 0,
+  })
+  const finderHydration = useRef({ foldersHydrated, tabsHydrated })
+  finderHydration.current = { foldersHydrated, tabsHydrated }
   const finderCallbacks = useRef({
     openFolder,
     openConversations,
@@ -103,8 +127,6 @@ export function WorkspaceOpenFolderListener() {
     lifecycle.started = true
     lifecycle.disposed = false
 
-    let pendingReady = false
-    let subscribed = false
     const bufferedEvents: FinderDirectoryOpened[] = []
     let processing = Promise.resolve()
 
@@ -141,52 +163,112 @@ export function WorkspaceOpenFolderListener() {
 
     const handleEvent = (detail: FinderDirectoryOpened) => {
       if (lifecycle.disposed) return
-      if (!pendingReady) bufferedEvents.push(detail)
+      if (!lifecycle.pendingReady) bufferedEvents.push(detail)
       else enqueue(detail)
     }
 
-    void (async () => {
+    const reportFinalFailure = (stage: "监听" | "消费", error: unknown) => {
+      console.error(`[Finder目录] ${stage}失败，重试次数已用尽`, error)
+    }
+
+    const scheduleRetry = (stage: "监听" | "消费", error: unknown) => {
+      if (lifecycle.disposed || lifecycle.retryTimer) return
+      const retries =
+        stage === "监听" ? lifecycle.listenRetries : lifecycle.consumeRetries
+      if (retries >= FINDER_MAX_RETRIES) {
+        reportFinalFailure(stage, error)
+        return
+      }
+      if (stage === "监听") lifecycle.listenRetries += 1
+      else lifecycle.consumeRetries += 1
+      lifecycle.retryTimer = setTimeout(() => {
+        lifecycle.retryTimer = undefined
+        if (lifecycle.disposed) return
+        lifecycle.kick?.()
+      }, FINDER_RETRY_DELAY_MS)
+    }
+
+    const consumePending = async () => {
+      if (
+        lifecycle.disposed ||
+        !lifecycle.subscribed ||
+        lifecycle.consuming ||
+        lifecycle.retryTimer ||
+        lifecycle.pendingReady ||
+        !finderHydration.current.foldersHydrated ||
+        !finderHydration.current.tabsHydrated
+      ) {
+        return
+      }
+      lifecycle.consuming = true
+      try {
+        const pending = await takePendingFinderDirectories()
+        if (lifecycle.disposed) return
+        lifecycle.pendingReady = true
+        lifecycle.consumeRetries = 0
+        for (const detail of pending) enqueue(detail)
+        for (const detail of bufferedEvents) enqueue(detail)
+        bufferedEvents.length = 0
+      } catch (error) {
+        scheduleRetry("消费", error)
+      } finally {
+        lifecycle.consuming = false
+      }
+    }
+
+    const subscribeToFinder = async () => {
+      if (
+        lifecycle.disposed ||
+        lifecycle.subscribed ||
+        lifecycle.subscribing ||
+        lifecycle.retryTimer
+      ) {
+        return
+      }
+      lifecycle.subscribing = true
       try {
         const dispose = await subscribe<FinderDirectoryOpened>(
           FINDER_DIRECTORY_OPENED_EVENT,
           handleEvent
         )
         if (lifecycle.disposed) {
+          lifecycle.subscribing = false
           dispose()
           return
         }
-        subscribed = true
+        lifecycle.subscribed = true
+        lifecycle.subscribing = false
+        lifecycle.listenRetries = 0
         lifecycle.unlisten = dispose
-
-        const pending = await takePendingFinderDirectories()
-        if (lifecycle.disposed) return
-        pendingReady = true
-        for (const detail of pending) enqueue(detail)
-        for (const detail of bufferedEvents) enqueue(detail)
-        bufferedEvents.length = 0
+        void consumePending()
       } catch (error) {
-        if (!lifecycle.disposed) {
-          if (subscribed) {
-            // 冷启动消费失败时仍放行已建立监听收到的实时事件，避免它们
-            // 永久停留在“等待待处理目录”缓冲区中。
-            pendingReady = true
-            for (const detail of bufferedEvents) enqueue(detail)
-            bufferedEvents.length = 0
-          }
-          console.error("[Finder目录] 建立目录监听或读取待处理目录失败", error)
-        }
+        lifecycle.subscribing = false
+        scheduleRetry("监听", error)
       }
-    })()
+    }
+
+    lifecycle.kick = () => {
+      void subscribeToFinder()
+      void consumePending()
+    }
+    lifecycle.kick()
 
     return () => {
       lifecycle.disposed = true
+      if (lifecycle.retryTimer) clearTimeout(lifecycle.retryTimer)
+      lifecycle.retryTimer = undefined
       lifecycle.cleanupTimer = setTimeout(() => {
         if (!lifecycle.disposed) return
         lifecycle.unlisten?.()
         lifecycle.unlisten = undefined
+        lifecycle.subscribed = false
       }, 0)
     }
   }, [])
+
+  useEffect(() => {
+    finderLifecycle.current.kick?.()
+  }, [foldersHydrated, tabsHydrated])
 
   return null
 }

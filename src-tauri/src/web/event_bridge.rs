@@ -409,25 +409,34 @@ pub const TOKEN_USAGE_SYNC_PROGRESS_EVENT: &str = "token-usage-sync://progress";
 /// Unified event emission: serializes the payload exactly once and dispatches
 /// the shared `Arc<Value>` to both the Tauri webview and the web broadcaster.
 pub fn emit_event(emitter: &EventEmitter, event: &str, payload: impl Serialize) {
+    let _ = emit_event_checked(emitter, event, payload);
+}
+
+pub fn emit_event_checked(emitter: &EventEmitter, event: &str, payload: impl Serialize) -> bool {
     match emitter {
         #[cfg(feature = "tauri-runtime")]
         EventEmitter::Tauri(app) => {
             use tauri::{Emitter, Manager};
             let Ok(value) = serde_json::to_value(&payload) else {
-                return;
+                return false;
             };
             let shared = Arc::new(value);
             // `&Value` is Copy, so Tauri's `Clone` bound is satisfied without
             // copying the payload — Tauri serializes through the reference.
-            let _ = app.emit(event, shared.as_ref());
+            let tauri_ok = match app.emit(event, shared.as_ref()) {
+                Ok(()) => true,
+                Err(error) => {
+                    tracing::warn!("Tauri 事件广播失败 event={event}: {error}");
+                    false
+                }
+            };
             if let Some(web) = app.try_state::<Arc<WebEventBroadcaster>>() {
                 web.send_value(event, shared);
             }
+            tauri_ok
         }
-        EventEmitter::WebOnly { broadcaster, .. } => {
-            let _ = broadcaster.send(event, &payload);
-        }
-        EventEmitter::Noop => {}
+        EventEmitter::WebOnly { broadcaster, .. } => broadcaster.send(event, &payload).is_some(),
+        EventEmitter::Noop => true,
     }
 }
 

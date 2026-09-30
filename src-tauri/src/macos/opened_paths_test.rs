@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use super::opened_paths::{
     deduplicate_paths, event_for_path, parse_opened_url, EnqueueResult, FinderDirectoryOpened,
-    OpenedPathQueue,
+    OpenedPathError, OpenedPathQueue,
 };
 
 #[test]
@@ -46,7 +46,7 @@ fn queue_holds_repeated_requests_until_frontend_is_ready() {
 
 #[test]
 fn event_payload_is_consumable_by_the_frontend() {
-    let event = event_for_path(PathBuf::from("/tmp/项目").as_path());
+    let event = event_for_path(PathBuf::from("/tmp/项目").as_path()).expect("有效 UTF-8 路径");
 
     assert_eq!(
         event,
@@ -57,6 +57,15 @@ fn event_payload_is_consumable_by_the_frontend() {
     assert_eq!(
         serde_json::to_value(event).expect("序列化事件"),
         serde_json::json!({ "path": "/tmp/项目" })
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn rejects_non_utf8_directory_path_during_parsing() {
+    assert_eq!(
+        parse_opened_url("file:///tmp/codeg-finder-%FF"),
+        Err(OpenedPathError::NonUtf8Path)
     );
 }
 

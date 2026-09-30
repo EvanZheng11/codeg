@@ -680,6 +680,15 @@ pub async fn open_folder_core(
     db: &AppDatabase,
     path: String,
 ) -> Result<FolderDetail, AppCommandError> {
+    // Finder 会先规范化路径；复用已有合法记录，避免符号链接别名产生重复文件夹。
+    let path = if let Ok(canonical) = std::fs::canonicalize(&path) {
+        folder_at_path(db, &canonical)
+            .await?
+            .map(|folder| folder.path)
+            .unwrap_or(path)
+    } else {
+        path
+    };
     let entry = folder_service::add_folder(&db.conn, &path)
         .await
         .map_err(AppCommandError::from)?;
@@ -1110,10 +1119,15 @@ pub async fn list_all_folder_details(
 #[cfg(feature = "tauri-runtime")]
 #[cfg_attr(feature = "tauri-runtime", tauri::command)]
 pub async fn open_folder(
+    app: tauri::AppHandle,
     db: tauri::State<'_, AppDatabase>,
     path: String,
 ) -> Result<FolderDetail, AppCommandError> {
-    open_folder_core(&db, path).await
+    let result = open_folder_core(&db, path).await;
+    if result.is_ok() {
+        crate::commands::windows::show_main_window(&app);
+    }
+    result
 }
 
 #[cfg(feature = "tauri-runtime")]

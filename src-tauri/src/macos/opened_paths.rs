@@ -11,6 +11,7 @@ pub enum OpenedPathError {
     UnsupportedScheme,
     NonLocalFile,
     InvalidFilePath,
+    NonUtf8Path,
     NotDirectory,
     UnreadablePath,
 }
@@ -30,6 +31,10 @@ pub fn parse_opened_url(raw: &str) -> Result<PathBuf, OpenedPathError> {
     let path = url
         .to_file_path()
         .map_err(|_| OpenedPathError::InvalidFilePath)?;
+    if path.to_str().is_none() {
+        tracing::warn!("Finder 目录事件拒绝非 UTF-8 路径：{:?}", path);
+        return Err(OpenedPathError::NonUtf8Path);
+    }
     let path = std::fs::canonicalize(path).map_err(|_| OpenedPathError::UnreadablePath)?;
     if !path.is_dir() {
         return Err(OpenedPathError::NotDirectory);
@@ -86,6 +91,15 @@ impl OpenedPathQueue {
     pub fn mark_frontend_ready(&self) -> Vec<PathBuf> {
         self.drain()
     }
+
+    pub fn requeue(&self, path: PathBuf) {
+        let Ok(mut state) = self.state.lock() else {
+            tracing::error!("Finder 目录事件队列锁已损坏，无法重新排队路径");
+            return;
+        };
+        state.frontend_ready = false;
+        state.pending.push(path);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -93,12 +107,11 @@ pub struct FinderDirectoryOpened {
     pub path: String,
 }
 
-pub fn event_for_path(path: &Path) -> FinderDirectoryOpened {
-    FinderDirectoryOpened {
-        // JSON 事件必须是 UTF-8；解析阶段仍保留非 UTF-8 PathBuf，交给前端
-        // 时使用稳定的 lossy 表示，避免因为路径编码导致整个事件丢失。
-        path: path.to_string_lossy().into_owned(),
-    }
+pub fn event_for_path(path: &Path) -> Result<FinderDirectoryOpened, OpenedPathError> {
+    let path = path.to_str().ok_or(OpenedPathError::NonUtf8Path)?;
+    Ok(FinderDirectoryOpened {
+        path: path.to_string(),
+    })
 }
 
 pub fn deduplicate_paths(paths: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
@@ -146,13 +159,21 @@ pub fn handle_opened_urls(app: &tauri::AppHandle, urls: &[Url]) {
 
 #[cfg(feature = "tauri-runtime")]
 fn emit_directory_opened(app: &tauri::AppHandle, path: &Path) {
+    let Ok(payload) = event_for_path(path) else {
+        tracing::warn!("Finder 目录事件拒绝非 UTF-8 路径：{:?}", path);
+        return;
+    };
     let emitter = crate::web::event_bridge::EventEmitter::Tauri(app.clone());
-    crate::web::event_bridge::emit_event(
+    if crate::web::event_bridge::emit_event_checked(
         &emitter,
         FINDER_DIRECTORY_OPENED_EVENT,
-        event_for_path(path),
-    );
-    tracing::info!("Finder 目录事件已广播：{}", path.display());
+        payload,
+    ) {
+        tracing::info!("Finder 目录事件已广播：{}", path.display());
+    } else {
+        tracing::warn!("Finder 目录事件广播失败，保留重试：{}", path.display());
+        global_queue().requeue(path.to_path_buf());
+    }
 }
 
 #[cfg(feature = "tauri-runtime")]
@@ -161,6 +182,12 @@ pub fn take_pending_finder_directories() -> Vec<FinderDirectoryOpened> {
     global_queue()
         .drain()
         .iter()
-        .map(|path| event_for_path(path.as_path()))
+        .filter_map(|path| match event_for_path(path.as_path()) {
+            Ok(event) => Some(event),
+            Err(error) => {
+                tracing::warn!("Finder 目录事件拒绝路径：{:?}：{:?}", path, error);
+                None
+            }
+        })
         .collect()
 }
