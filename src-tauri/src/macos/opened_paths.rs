@@ -70,9 +70,6 @@ impl OpenedPathQueue {
         if state.frontend_ready {
             return EnqueueResult::Ready;
         }
-        if state.pending.iter().any(|pending| pending == &path) {
-            return EnqueueResult::Duplicate;
-        }
         state.pending.push(path);
         EnqueueResult::Queued
     }

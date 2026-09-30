@@ -30,13 +30,16 @@ fn rejects_non_file_urls_and_files() {
 }
 
 #[test]
-fn queue_holds_paths_until_frontend_is_ready_and_deduplicates() {
+fn queue_holds_repeated_requests_until_frontend_is_ready() {
     let queue = OpenedPathQueue::new();
     let path = PathBuf::from("/tmp/codeg-finder-test");
 
     assert_eq!(queue.push(path.clone()), EnqueueResult::Queued);
-    assert_eq!(queue.push(path.clone()), EnqueueResult::Duplicate);
-    assert_eq!(queue.mark_frontend_ready(), vec![path.clone()]);
+    assert_eq!(queue.push(path.clone()), EnqueueResult::Queued);
+    assert_eq!(
+        queue.mark_frontend_ready(),
+        vec![path.clone(), path.clone()]
+    );
     assert!(queue.mark_frontend_ready().is_empty());
     assert_eq!(queue.push(path), EnqueueResult::Ready);
 }
