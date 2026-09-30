@@ -124,8 +124,8 @@ export function TerminalView({
   isVisible,
   keybarVisible = false,
   attach = false,
-  spawnOnMissing = true,
-  reuseCompleted = false,
+  spawnOnMissing: spawnOnMissingProp = true,
+  reuseCompleted: reuseCompletedProp = false,
   onSpawned,
   onProcessRestored,
   ignoreAppZoom = false,
@@ -140,6 +140,12 @@ export function TerminalView({
   const onProcessExitedRef = useRef(onProcessExited)
   const onSpawnedRef = useRef(onSpawned)
   const onProcessRestoredRef = useRef(onProcessRestored)
+  // Policy for the NEXT attach, read when one starts, not part of what the
+  // mount is attached to. The panel turns `spawnOnMissing` off the moment its
+  // spawn succeeds; re-running the effect on that would dispose the emulator
+  // it just opened (and its focus) to reattach to the very same PTY.
+  const spawnOnMissingRef = useRef(spawnOnMissingProp)
+  const reuseCompletedRef = useRef(reuseCompletedProp)
   // Link clicks route through the app's link decision (built-in browser vs
   // system browser, ⌘/Ctrl inverts). xterm's default handler is a bare
   // `window.open`, which the desktop webview turns into a dead click.
@@ -258,6 +264,11 @@ export function TerminalView({
     onSpawnedRef.current = onSpawned
     onProcessRestoredRef.current = onProcessRestored
   }, [onProcessExited, onSpawned, onProcessRestored])
+
+  useEffect(() => {
+    spawnOnMissingRef.current = spawnOnMissingProp
+    reuseCompletedRef.current = reuseCompletedProp
+  }, [spawnOnMissingProp, reuseCompletedProp])
 
   useEffect(() => {
     openUrlTargetRef.current = openUrlTarget
@@ -577,8 +588,13 @@ export function TerminalView({
       const syncFromBackend = () => {
         if (cancelled) return
         const generation = ++reconnectGeneration
-        replayBuffer = []
-        exitWhileBuffering = null
+        // A sync still in flight keeps what it buffered. This newer snapshot
+        // supersedes it, but if the request fails, those events — received
+        // and never drawn — must still be flushed rather than dropped.
+        if (!replayBuffer) {
+          replayBuffer = []
+          exitWhileBuffering = null
+        }
         void terminalSnapshot(terminalId)
           .then((snapshot) => {
             if (cancelled || generation !== reconnectGeneration) return
@@ -627,6 +643,9 @@ export function TerminalView({
         return null
       }
 
+      // Read once: this attach runs under the policy it started with.
+      const spawnOnMissing = spawnOnMissingRef.current
+      const reuseCompleted = reuseCompletedRef.current
       let attached = false
       let confirmedMissing = false
       let previousCompleted: TerminalSnapshot | null = null
@@ -657,18 +676,20 @@ export function TerminalView({
       if (!attached && spawnOnMissing) {
         try {
           await terminalSpawn(workingDir, shell, initialCommand, terminalId)
+          // Reported before anything that bails out on unmount: the tab
+          // outlives this view (a drawer swiped shut mid-spawn), and whichever
+          // view mounts for it next must attach, never launch the command twice.
+          onSpawnedRef.current?.(terminalId)
           // This handshake gives buffered output its PTY generation. A delayed
-          // event from a previous process with this same id must not leak in.
-          const launched = attach
-            ? await terminalSnapshot(terminalId).catch(() => null)
-            : null
+          // event from a previous process with this same id must not leak in,
+          // so a failed request is retried rather than taken as "no filter".
+          const launched = attach ? await readSnapshot(true, () => true) : null
           if (cancelled) {
             teardown()
             return
           }
           if (launched?.alive || launched?.exists) applySnapshot(launched)
           else flushReplay(null)
-          onSpawnedRef.current?.(terminalId)
         } catch (err) {
           // A second mount can lose to the first while its PTY is still in
           // openpty/spawn and absent from snapshots. Wait only for that known
@@ -777,15 +798,7 @@ export function TerminalView({
       // menu must not outlive it and open the old terminal's link.
       setLinkClick(null)
     }
-  }, [
-    terminalId,
-    workingDir,
-    shell,
-    initialCommand,
-    attach,
-    spawnOnMissing,
-    reuseCompleted,
-  ])
+  }, [terminalId, workingDir, shell, initialCommand, attach])
 
   // Refit and focus when becoming active or panel becomes visible
   useEffect(() => {

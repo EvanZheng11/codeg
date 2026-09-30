@@ -1,4 +1,5 @@
 import { act, render, waitFor } from "@testing-library/react"
+import { useState } from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { TerminalView } from "./terminal-view"
 import type { TerminalEvent, TerminalSnapshot } from "@/lib/types"
@@ -6,6 +7,8 @@ import type { TerminalEvent, TerminalSnapshot } from "@/lib/types"
 const h = vi.hoisted(() => ({
   writes: [] as string[],
   resets: 0,
+  emulators: 0,
+  disposed: 0,
   snapshot: vi.fn(),
   spawn: vi.fn(),
   kill: vi.fn(async () => {}),
@@ -64,6 +67,9 @@ vi.mock("@/components/terminal/terminal-link-menu", () => ({
 vi.mock("@/components/terminal/term-keybar", () => ({ TermKeybar: () => null }))
 vi.mock("@xterm/xterm", () => ({
   Terminal: class {
+    constructor() {
+      h.emulators++
+    }
     options = { fontFamily: "", fontSize: 12, theme: {} }
     modes = { applicationCursorKeysMode: false }
     loadAddon() {}
@@ -87,7 +93,9 @@ vi.mock("@xterm/xterm", () => ({
       h.resets++
       h.writes.push("<reset>")
     }
-    dispose() {}
+    dispose() {
+      h.disposed++
+    }
     focus() {}
   },
 }))
@@ -121,6 +129,8 @@ describe("TerminalView recovery", () => {
   beforeEach(() => {
     h.writes.length = 0
     h.resets = 0
+    h.emulators = 0
+    h.disposed = 0
     h.snapshot.mockReset()
     h.snapshot.mockResolvedValue({
       exists: false,
@@ -603,5 +613,150 @@ describe("TerminalView recovery", () => {
     )
     await waitFor(() => expect(h.writes).toContain("still running"))
     expect(h.spawn).toHaveBeenCalledTimes(1)
+  })
+
+  it("keeps one emulator when a new panel tab is marked started by its own spawn", async () => {
+    // Wired the way TerminalPanel wires it: `spawnOnMissing={!tab.restored}`,
+    // with `onSpawned` setting `restored`. That flip only governs a LATER
+    // mount. Re-running this one for it would dispose the emulator a moment
+    // after the shell started — with its focus and any keys typed meanwhile.
+    let started = false
+    h.snapshot.mockImplementation(async () =>
+      started
+        ? snapshot("prompt$ ", 1)
+        : {
+            exists: false,
+            alive: false,
+            data: "",
+            seq: 0,
+            exit_code: null,
+            generation: null,
+          }
+    )
+    h.spawn.mockImplementation(async () => {
+      started = true
+      return "terminal-1"
+    })
+    function PanelTab() {
+      const [restored, setRestored] = useState(false)
+      return (
+        <TerminalView
+          {...props}
+          attach
+          spawnOnMissing={!restored}
+          reuseCompleted
+          onSpawned={() => setRestored(true)}
+        />
+      )
+    }
+
+    const view = render(<PanelTab />)
+    await waitFor(() => expect(h.writes.join("")).toContain("prompt$ "))
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    expect(h.spawn).toHaveBeenCalledTimes(1)
+    expect(h.emulators).toBe(1)
+    expect(h.disposed).toBe(0)
+    view.unmount()
+    expect(h.disposed).toBe(1)
+  })
+
+  it("keeps a new PTY's input when the handshake after its spawn fails once", async () => {
+    // A canvas card restarting over a completed PTY: the old reader's late
+    // exit can land while the new process's generation is still unknown. A
+    // failed handshake must be retried, not taken as "accept every generation".
+    h.snapshot.mockResolvedValueOnce({
+      ...snapshot("old completed output", 3, false),
+      exit_code: 6,
+      generation: "old-generation",
+    })
+    let failHandshake!: (reason: Error) => void
+    h.snapshot.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          failHandshake = reject
+        })
+    )
+    h.snapshot.mockResolvedValueOnce(snapshot("new shell$ ", 1))
+
+    const view = render(<TerminalView {...props} attach />)
+    await waitFor(() => expect(h.snapshot).toHaveBeenCalledTimes(2))
+    expect(h.spawn).toHaveBeenCalledTimes(1)
+    act(() => {
+      h.handlers.get("terminal://exit/terminal-1")?.({
+        terminal_id: "terminal-1",
+        data: "",
+        seq: 0,
+        generation: "old-generation",
+      })
+    })
+    await act(async () => {
+      failHandshake(new Error("snapshot temporarily unavailable"))
+    })
+    await waitFor(() => expect(h.writes.join("")).toContain("new shell$ "))
+    expect(h.writes.join("")).not.toContain("processExited")
+    act(() => {
+      h.onData?.("x")
+    })
+    await waitFor(() => expect(h.write).toHaveBeenCalledWith("terminal-1", "x"))
+    view.unmount()
+  })
+
+  it("flushes what an overlapping resync buffered when the newer snapshot fails", async () => {
+    h.snapshot.mockResolvedValueOnce(snapshot("before", 2))
+    const view = render(
+      <TerminalView {...props} attach spawnOnMissing={false} reuseCompleted />
+    )
+    await waitFor(() => expect(h.writes).toContain("before"))
+
+    // The first resync's snapshot is still out when a second ready arrives.
+    h.snapshot.mockImplementationOnce(() => new Promise(() => {}))
+    act(() => {
+      h.ready?.()
+    })
+    act(() => {
+      h.handlers.get("terminal://output/terminal-1")?.({
+        terminal_id: "terminal-1",
+        data: "between",
+        seq: 3,
+        generation: "new-generation",
+      })
+    })
+    h.snapshot.mockRejectedValueOnce(new Error("offline again"))
+    await act(async () => {
+      h.ready?.()
+    })
+    await waitFor(() => expect(h.writes).toContain("between"))
+    view.unmount()
+  })
+
+  it("reports a launch that lands after its view unmounted, so a later mount attaches", async () => {
+    // A drawer swiped shut mid-spawn unmounts the view, but the tab stays.
+    // Unless the launch is reported anyway, the tab still reads as never
+    // started, and the next mount after the PTY is gone runs the command again.
+    let finishSpawn!: (id: string) => void
+    h.spawn.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishSpawn = resolve
+        })
+    )
+    const onSpawned = vi.fn()
+    const view = render(
+      <TerminalView
+        {...props}
+        attach
+        initialCommand="make deploy"
+        onSpawned={onSpawned}
+      />
+    )
+    await waitFor(() => expect(h.spawn).toHaveBeenCalledTimes(1))
+    view.unmount()
+    await act(async () => {
+      finishSpawn("terminal-1")
+    })
+    await waitFor(() => expect(onSpawned).toHaveBeenCalledWith("terminal-1"))
+    expect(h.kill).not.toHaveBeenCalled()
   })
 })
