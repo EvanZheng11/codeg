@@ -38,6 +38,8 @@ pub mod git_repo;
 pub mod intern;
 pub mod keyring_store;
 pub mod logging;
+#[cfg(all(feature = "tauri-runtime", target_os = "macos"))]
+pub mod macos;
 pub mod models;
 mod network;
 pub mod office_watch;
@@ -1698,6 +1700,8 @@ mod tauri_app {
                 windows::resize_pet_panel,
                 windows::focus_conversation,
                 crate::deep_link::take_pending_deep_link,
+                #[cfg(target_os = "macos")]
+                crate::macos::opened_paths::take_pending_finder_directories,
                 windows::update_traffic_light_position,
                 windows::update_appearance_mode,
                 windows::set_tray_locale,
@@ -2074,6 +2078,10 @@ mod tauri_app {
                     if let Some(cm) = app.try_state::<ConnectionManager>() {
                         tauri::async_runtime::block_on(cm.disconnect_all());
                     }
+                }
+                #[cfg(target_os = "macos")]
+                tauri::RunEvent::Opened { urls } => {
+                    crate::macos::opened_paths::handle_opened_urls(app, &urls);
                 }
                 #[cfg(target_os = "macos")]
                 tauri::RunEvent::Reopen { .. } => {

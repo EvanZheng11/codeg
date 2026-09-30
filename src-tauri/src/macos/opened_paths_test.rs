@@ -1,0 +1,68 @@
+use std::path::PathBuf;
+
+use super::opened_paths::{
+    deduplicate_paths, event_for_path, parse_opened_url, EnqueueResult, FinderDirectoryOpened,
+    OpenedPathQueue,
+};
+
+#[test]
+fn parses_and_canonicalizes_local_directory_url() {
+    let temp = tempfile::tempdir().expect("创建临时目录");
+    let nested = temp.path().join("中文 目录");
+    std::fs::create_dir(&nested).expect("创建嵌套目录");
+    let raw = url::Url::from_directory_path(&nested).expect("构造文件 URL");
+
+    assert_eq!(
+        parse_opened_url(raw.as_str()).expect("解析目录"),
+        std::fs::canonicalize(nested).expect("规范化目录")
+    );
+}
+
+#[test]
+fn rejects_non_file_urls_and_files() {
+    let temp = tempfile::tempdir().expect("创建临时目录");
+    let file = temp.path().join("文件.txt");
+    std::fs::write(&file, "内容").expect("创建文件");
+    let file_url = url::Url::from_file_path(file).expect("构造文件 URL");
+
+    assert!(parse_opened_url("https://example.com/project").is_err());
+    assert!(parse_opened_url(file_url.as_str()).is_err());
+}
+
+#[test]
+fn queue_holds_paths_until_frontend_is_ready_and_deduplicates() {
+    let queue = OpenedPathQueue::new();
+    let path = PathBuf::from("/tmp/codeg-finder-test");
+
+    assert_eq!(queue.push(path.clone()), EnqueueResult::Queued);
+    assert_eq!(queue.push(path.clone()), EnqueueResult::Duplicate);
+    assert_eq!(queue.mark_frontend_ready(), vec![path.clone()]);
+    assert!(queue.mark_frontend_ready().is_empty());
+    assert_eq!(queue.push(path), EnqueueResult::Ready);
+}
+
+#[test]
+fn event_payload_is_consumable_by_the_frontend() {
+    let event = event_for_path(PathBuf::from("/tmp/项目").as_path());
+
+    assert_eq!(
+        event,
+        FinderDirectoryOpened {
+            path: "/tmp/项目".to_string(),
+        }
+    );
+    assert_eq!(
+        serde_json::to_value(event).expect("序列化事件"),
+        serde_json::json!({ "path": "/tmp/项目" })
+    );
+}
+
+#[test]
+fn deduplicates_one_opened_event_but_allows_a_later_open() {
+    let path = PathBuf::from("/tmp/codeg-finder-test");
+    assert_eq!(
+        deduplicate_paths(vec![path.clone(), path.clone()]),
+        vec![path.clone()]
+    );
+    assert_eq!(deduplicate_paths(vec![path.clone()]), vec![path]);
+}
