@@ -155,8 +155,13 @@ impl CompletedTerminals {
         let removed = self.entries.remove(id);
         if let Some(mut entry) = removed {
             if entry.exit_code.is_none() {
-                let _ = entry.child.kill();
-                let _ = entry.child.wait();
+                // Reap it if it has exited since, so it leaves no zombie, but
+                // never kill it. Reader EOF does not prove the process ended:
+                // a child can close its terminal and keep running, and such a
+                // process was always left alone once its PTY closed. Dropping
+                // a cache entry must not be what ends it — and a kill + wait
+                // here would stall every caller holding the terminal table.
+                let _ = entry.child.try_wait();
             }
             self.order.retain(|entry_id| entry_id != id);
             true
@@ -1081,6 +1086,98 @@ mod tests {
         assert!(!snapshot.alive);
         assert!(snapshot.data.is_empty());
         assert_eq!(snapshot.seq, 0);
+    }
+
+    /// A PTY child whose exit the manager never observed. Records whether the
+    /// manager ended it (a kill, or a blocking wait that only a kill would end).
+    #[derive(Debug)]
+    struct UnobservedChild {
+        ended: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl portable_pty::ChildKiller for UnobservedChild {
+        fn kill(&mut self) -> std::io::Result<()> {
+            self.ended.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+
+        fn clone_killer(&self) -> Box<dyn portable_pty::ChildKiller + Send + Sync> {
+            Box::new(UnobservedChild {
+                ended: self.ended.clone(),
+            })
+        }
+    }
+
+    impl portable_pty::Child for UnobservedChild {
+        fn try_wait(&mut self) -> std::io::Result<Option<portable_pty::ExitStatus>> {
+            Ok(None)
+        }
+
+        fn wait(&mut self) -> std::io::Result<portable_pty::ExitStatus> {
+            self.ended.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(portable_pty::ExitStatus::with_exit_code(0))
+        }
+
+        fn process_id(&self) -> Option<u32> {
+            None
+        }
+
+        #[cfg(windows)]
+        fn as_raw_handle(&self) -> Option<std::os::windows::io::RawHandle> {
+            None
+        }
+    }
+
+    #[test]
+    fn a_completed_entry_never_ends_a_process_whose_exit_it_did_not_see() {
+        // Reader EOF only says the PTY closed: a child can close its terminal
+        // and keep running. However its cache entry goes — an explicit close,
+        // a count prune, a window's bulk kill, the quit — the process it names
+        // must be left running, as it was before the cache existed.
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let manager = super::TerminalManager::new();
+        let mut flags = Vec::new();
+        {
+            let mut completed = super::lock_completed(&manager.completed);
+            for n in 0..=super::COMPLETED_MAX_COUNT + 1 {
+                let id = format!("detached-{n}");
+                let owner = if n % 2 == 0 { "main" } else { "other" };
+                let ended = std::sync::Arc::new(AtomicBool::new(false));
+                flags.push((id.clone(), ended.clone()));
+                completed.order.push_back(id.clone());
+                completed.entries.insert(
+                    id,
+                    super::CompletedTerminal {
+                        scrollback: std::sync::Arc::new(std::sync::Mutex::new(
+                            Scrollback::default(),
+                        )),
+                        owner_window_label: owner.to_string(),
+                        generation: "generation".to_string(),
+                        child: Box::new(UnobservedChild { ended }),
+                        exit_code: None,
+                        finished_at: std::time::Instant::now(),
+                    },
+                );
+            }
+        }
+
+        // Over the count bound: the snapshot's prune evicts the oldest.
+        let _ = manager.snapshot("unknown");
+        let last = format!("detached-{}", super::COMPLETED_MAX_COUNT + 1);
+        manager
+            .kill(&last)
+            .expect("explicit close of a completed entry");
+        manager.kill_by_owner_window("main");
+        manager.kill_all();
+
+        assert!(super::lock_completed(&manager.completed).entries.is_empty());
+        for (id, ended) in flags {
+            assert!(
+                !ended.load(Ordering::SeqCst),
+                "{id}: dropping its cache entry ended a process still running"
+            );
+        }
     }
 
     #[cfg(not(target_os = "windows"))]
