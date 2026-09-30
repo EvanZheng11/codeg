@@ -8,6 +8,12 @@ import { resolveRequestLocale } from "@/i18n/resolve-request-locale"
 import { ThemeProvider } from "@/components/theme-provider"
 import { toIntlLocale } from "@/lib/i18n"
 import { APPEARANCE_INIT_SCRIPT } from "@/lib/appearance-script"
+import {
+  THEME_COLOR_DARK,
+  THEME_COLOR_LIGHT,
+  THEME_COLOR_MEDIA_DARK,
+  THEME_COLOR_MEDIA_LIGHT,
+} from "@/lib/theme-color"
 import { AppearanceProvider } from "@/components/appearance-provider"
 import { OverlayScrollbarsInit } from "@/components/overlay-scrollbars-init"
 import { ClipboardFallbackInit } from "@/components/clipboard-fallback-init"
@@ -20,9 +26,11 @@ export const viewport: Viewport = {
   initialScale: 1,
   viewportFit: "cover",
   colorScheme: "dark light",
+  // In-app light/dark overrides of these are applied by the pre-paint script
+  // and ThemeProvider, see `@/lib/theme-color`.
   themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
-    { media: "(prefers-color-scheme: dark)", color: "#09090b" },
+    { media: THEME_COLOR_MEDIA_LIGHT, color: THEME_COLOR_LIGHT },
+    { media: THEME_COLOR_MEDIA_DARK, color: THEME_COLOR_DARK },
   ],
 }
 
@@ -56,6 +64,11 @@ export default async function RootLayout({
   return (
     <html lang={initialLocale} suppressHydrationWarning>
       <head>
+        {/* Written by hand rather than via `metadata.manifest`: Next only adds
+            `crossOrigin="use-credentials"` there on Vercel preview builds.
+            Without it the browser fetches the manifest without cookies, and
+            an auth proxy in front of codeg-server answers with its login
+            redirect instead of the manifest. */}
         <link
           rel="manifest"
           href="/manifest.json"
