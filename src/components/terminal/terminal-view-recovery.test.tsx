@@ -731,7 +731,7 @@ describe("TerminalView recovery", () => {
     view.unmount()
   })
 
-  it("reports a launch that lands after its view unmounted, so a later mount attaches", async () => {
+  it("reports a launch that lands after its view unmounted", async () => {
     // A drawer swiped shut mid-spawn unmounts the view, but the tab stays.
     // Unless the launch is reported anyway, the tab still reads as never
     // started, and the next mount after the PTY is gone runs the command again.

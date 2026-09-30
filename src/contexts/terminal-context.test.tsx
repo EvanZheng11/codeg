@@ -251,6 +251,11 @@ describe("TerminalProvider reload recovery", () => {
     fireEvent.click(screen.getByRole("button", { name: "Run" }))
     fireEvent.click(screen.getByRole("button", { name: "Rename long" }))
     expect(screen.getByTestId("titles")).toHaveTextContent("300")
+    // Clamped on the way in, not only on the way back out.
+    const stored = JSON.parse(
+      sessionStorage.getItem("codeg:terminal-session:v1") ?? "{}"
+    )
+    expect(stored.tabs[0].title).toHaveLength(256)
     first.unmount()
 
     render(
