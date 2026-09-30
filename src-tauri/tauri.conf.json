@@ -43,6 +43,9 @@
       "rpm": {
         "desktopTemplate": "./linux/main.desktop"
       }
+    },
+    "macOS": {
+      "infoPlist": "./Info.plist"
     }
   },
   "plugins": {
