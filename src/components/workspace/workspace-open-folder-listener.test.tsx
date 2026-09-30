@@ -122,7 +122,10 @@ beforeEach(() => {
   mocks.openFolder.mockResolvedValue(folder)
 })
 
-afterEach(() => cleanup())
+afterEach(() => {
+  vi.useRealTimers()
+  cleanup()
+})
 
 describe("WorkspaceOpenFolderListener", () => {
   it("先建立监听再消费冷启动目录，并使用目录默认智能体打开新 draft", async () => {
@@ -256,6 +259,82 @@ describe("WorkspaceOpenFolderListener", () => {
     vi.useRealTimers()
   })
 
+  it("监听连续失败超过三次后仍继续重试并处理后续事件", async () => {
+    vi.useFakeTimers()
+    let finderAttempts = 0
+    mocks.subscribe.mockImplementation(
+      async (event: string, handler: (payload: unknown) => void) => {
+        if (event === "finder://directory-opened" && finderAttempts++ < 4) {
+          throw new Error("监听失败")
+        }
+        if (event === "finder://directory-opened") eventHandler = handler
+        return unsubscribe
+      }
+    )
+
+    render(<WorkspaceOpenFolderListener />)
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+
+    for (const delay of [50, 100, 200, 400]) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(delay)
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+    }
+
+    expect(eventHandler).toBeTruthy()
+    emit(folder.path)
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(mocks.openFolder).toHaveBeenCalledWith(folder.path)
+    vi.useRealTimers()
+  })
+
+  it("消费连续失败超过三次后仍继续重试并处理待处理及后续事件", async () => {
+    vi.useFakeTimers()
+    mocks.takePendingFinderDirectories
+      .mockRejectedValueOnce(new Error("消费失败"))
+      .mockRejectedValueOnce(new Error("消费失败"))
+      .mockRejectedValueOnce(new Error("消费失败"))
+      .mockRejectedValueOnce(new Error("消费失败"))
+      .mockResolvedValueOnce([{ path: folder.path }])
+
+    render(<WorkspaceOpenFolderListener />)
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    emit("/Users/me/realtime-after-retries")
+    expect(mocks.openFolder).not.toHaveBeenCalled()
+
+    for (const delay of [50, 100, 200, 400]) {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(delay)
+        await Promise.resolve()
+        await Promise.resolve()
+      })
+    }
+
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(mocks.openFolder).toHaveBeenCalledTimes(2)
+    expect(mocks.openFolder.mock.calls.map(([path]) => path)).toEqual([
+      folder.path,
+      "/Users/me/realtime-after-retries",
+    ])
+    vi.useRealTimers()
+  })
+
   it("卸载时取消监听失败的重试定时器", async () => {
     vi.useFakeTimers()
     mocks.subscribe.mockImplementation(async (event: string) => {
@@ -278,6 +357,26 @@ describe("WorkspaceOpenFolderListener", () => {
         ([event]) => event === "finder://directory-opened"
       )
     ).toHaveLength(callsBeforeUnmount)
+    vi.useRealTimers()
+  })
+
+  it("卸载时取消消费失败的重试定时器", async () => {
+    vi.useFakeTimers()
+    mocks.takePendingFinderDirectories.mockRejectedValue(new Error("消费失败"))
+
+    const { unmount } = render(<WorkspaceOpenFolderListener />)
+    await act(async () => {
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+    })
+    expect(mocks.takePendingFinderDirectories).toHaveBeenCalledTimes(1)
+    unmount()
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000)
+    })
+    expect(mocks.takePendingFinderDirectories).toHaveBeenCalledTimes(1)
     vi.useRealTimers()
   })
 

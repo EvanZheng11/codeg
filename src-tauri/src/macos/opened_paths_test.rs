@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+#[cfg(feature = "tauri-runtime")]
+use super::opened_paths::retry_delay;
 use super::opened_paths::{
     deduplicate_paths, event_for_path, parse_opened_url, EnqueueResult, FinderDirectoryOpened,
     OpenedPathError, OpenedPathQueue,
@@ -45,7 +47,7 @@ fn queue_holds_repeated_requests_until_frontend_is_ready() {
 }
 
 #[test]
-fn failed_event_keeps_frontend_ready_for_later_requests() {
+fn failed_event_remains_recoverable_after_repeated_retries() {
     let queue = OpenedPathQueue::new();
     let failed_path = PathBuf::from("/tmp/codeg-finder-failed");
     let later_path = PathBuf::from("/tmp/codeg-finder-later");
@@ -53,6 +55,10 @@ fn failed_event_keeps_frontend_ready_for_later_requests() {
     assert!(queue.mark_frontend_ready().is_empty());
     queue.requeue(failed_path.clone());
 
+    for _ in 0..4 {
+        assert!(queue.remove_pending(&failed_path));
+        queue.requeue(failed_path.clone());
+    }
     assert_eq!(queue.push(later_path), EnqueueResult::Ready);
     assert!(queue.remove_pending(&failed_path));
     assert_eq!(
@@ -60,6 +66,15 @@ fn failed_event_keeps_frontend_ready_for_later_requests() {
         EnqueueResult::Ready
     );
     assert!(queue.mark_frontend_ready().is_empty());
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[test]
+fn background_retry_delay_continues_after_three_failures() {
+    assert_eq!(retry_delay(0), std::time::Duration::from_millis(50));
+    assert_eq!(retry_delay(3), std::time::Duration::from_millis(400));
+    assert_eq!(retry_delay(4), std::time::Duration::from_millis(800));
+    assert_eq!(retry_delay(20), std::time::Duration::from_secs(5));
 }
 
 #[test]

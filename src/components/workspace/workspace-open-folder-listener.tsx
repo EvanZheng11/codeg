@@ -19,7 +19,7 @@ import { toErrorMessage } from "@/lib/app-error"
 import type { FolderDetail } from "@/lib/types"
 
 const FINDER_RETRY_DELAY_MS = 50
-const FINDER_MAX_RETRIES = 3
+const FINDER_MAX_RETRY_DELAY_MS = 5000
 
 /**
  * 处理项目启动器和 macOS Finder 打开的目录：更新本窗口工作区，创建未发送
@@ -42,8 +42,7 @@ export function WorkspaceOpenFolderListener() {
     subscribing: boolean
     consuming: boolean
     pendingReady: boolean
-    listenRetries: number
-    consumeRetries: number
+    retryCount: number
     kick?: () => void
   }>({
     started: false,
@@ -52,8 +51,7 @@ export function WorkspaceOpenFolderListener() {
     subscribing: false,
     consuming: false,
     pendingReady: false,
-    listenRetries: 0,
-    consumeRetries: 0,
+    retryCount: 0,
   })
   const finderHydration = useRef({ foldersHydrated, tabsHydrated })
   finderHydration.current = { foldersHydrated, tabsHydrated }
@@ -167,25 +165,21 @@ export function WorkspaceOpenFolderListener() {
       else enqueue(detail)
     }
 
-    const reportFinalFailure = (stage: "监听" | "消费", error: unknown) => {
-      console.error(`[Finder目录] ${stage}失败，重试次数已用尽`, error)
-    }
-
     const scheduleRetry = (stage: "监听" | "消费", error: unknown) => {
-      if (lifecycle.disposed || lifecycle.retryTimer) return
-      const retries =
-        stage === "监听" ? lifecycle.listenRetries : lifecycle.consumeRetries
-      if (retries >= FINDER_MAX_RETRIES) {
-        reportFinalFailure(stage, error)
-        return
-      }
-      if (stage === "监听") lifecycle.listenRetries += 1
-      else lifecycle.consumeRetries += 1
-      lifecycle.retryTimer = setTimeout(() => {
+      if (lifecycle.disposed) return
+      if (lifecycle.retryTimer) return
+      const retries = lifecycle.retryCount++
+      const delay = Math.min(
+        FINDER_RETRY_DELAY_MS * 2 ** retries,
+        FINDER_MAX_RETRY_DELAY_MS
+      )
+      console.warn(`[Finder目录] ${stage}失败，将在${delay}毫秒后重试`, error)
+      const timer = setTimeout(() => {
         lifecycle.retryTimer = undefined
         if (lifecycle.disposed) return
         lifecycle.kick?.()
-      }, FINDER_RETRY_DELAY_MS)
+      }, delay)
+      lifecycle.retryTimer = timer
     }
 
     const consumePending = async () => {
@@ -205,7 +199,7 @@ export function WorkspaceOpenFolderListener() {
         const pending = await takePendingFinderDirectories()
         if (lifecycle.disposed) return
         lifecycle.pendingReady = true
-        lifecycle.consumeRetries = 0
+        lifecycle.retryCount = 0
         for (const detail of pending) enqueue(detail)
         for (const detail of bufferedEvents) enqueue(detail)
         bufferedEvents.length = 0
@@ -238,7 +232,7 @@ export function WorkspaceOpenFolderListener() {
         }
         lifecycle.subscribed = true
         lifecycle.subscribing = false
-        lifecycle.listenRetries = 0
+        lifecycle.retryCount = 0
         lifecycle.unlisten = dispose
         void consumePending()
       } catch (error) {
@@ -255,10 +249,10 @@ export function WorkspaceOpenFolderListener() {
 
     return () => {
       lifecycle.disposed = true
-      if (lifecycle.retryTimer) clearTimeout(lifecycle.retryTimer)
-      lifecycle.retryTimer = undefined
       lifecycle.cleanupTimer = setTimeout(() => {
         if (!lifecycle.disposed) return
+        if (lifecycle.retryTimer) clearTimeout(lifecycle.retryTimer)
+        lifecycle.retryTimer = undefined
         lifecycle.unlisten?.()
         lifecycle.unlisten = undefined
         lifecycle.subscribed = false

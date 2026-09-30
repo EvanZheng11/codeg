@@ -1,3 +1,5 @@
+#[cfg(feature = "tauri-runtime")]
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 #[cfg(feature = "tauri-runtime")]
@@ -139,6 +141,24 @@ pub fn deduplicate_paths(paths: impl IntoIterator<Item = PathBuf>) -> Vec<PathBu
 
 static OPENED_PATH_QUEUE: OnceLock<OpenedPathQueue> = OnceLock::new();
 
+#[cfg(feature = "tauri-runtime")]
+struct EmitRetry {
+    app: tauri::AppHandle,
+    path: PathBuf,
+    payload: FinderDirectoryOpened,
+    attempt: u32,
+}
+
+#[cfg(feature = "tauri-runtime")]
+#[derive(Default)]
+struct EmitRetryState {
+    pending: VecDeque<EmitRetry>,
+    running: bool,
+}
+
+#[cfg(feature = "tauri-runtime")]
+static EMIT_RETRY_STATE: OnceLock<Mutex<EmitRetryState>> = OnceLock::new();
+
 pub fn global_queue() -> &'static OpenedPathQueue {
     OPENED_PATH_QUEUE.get_or_init(OpenedPathQueue::new)
 }
@@ -192,41 +212,94 @@ fn emit_directory_opened(app: &tauri::AppHandle, path: &Path) {
 
 #[cfg(feature = "tauri-runtime")]
 fn schedule_emit_retry(app: tauri::AppHandle, path: PathBuf, payload: FinderDirectoryOpened) {
-    tauri::async_runtime::spawn(async move {
-        for attempt in 1..=3 {
-            tokio::time::sleep(Duration::from_millis(50)).await;
-            if !global_queue().remove_pending(&path) {
-                tracing::info!(
-                    "Finder 目录事件已由前端待处理队列消费，取消后台重试：{}",
-                    path.display()
-                );
+    let retry_state = EMIT_RETRY_STATE.get_or_init(|| Mutex::new(EmitRetryState::default()));
+    let should_start = {
+        let Ok(mut state) = retry_state.lock() else {
+            tracing::error!("Finder 目录事件重试队列锁已损坏，无法安排重试");
+            return;
+        };
+        state.pending.push_back(EmitRetry {
+            app,
+            path,
+            payload,
+            attempt: 0,
+        });
+        if state.running {
+            false
+        } else {
+            state.running = true;
+            true
+        }
+    };
+
+    if should_start {
+        tauri::async_runtime::spawn(run_emit_retries());
+    }
+}
+
+#[cfg(feature = "tauri-runtime")]
+pub(crate) fn retry_delay(attempt: u32) -> Duration {
+    Duration::from_millis(50 * 2u64.pow(attempt.min(7))).min(Duration::from_secs(5))
+}
+
+#[cfg(feature = "tauri-runtime")]
+async fn run_emit_retries() {
+    loop {
+        let retry = {
+            let Some(retry_state) = EMIT_RETRY_STATE.get() else {
                 return;
-            }
-            let emitter = crate::web::event_bridge::EventEmitter::Tauri(app.clone());
-            if crate::web::event_bridge::emit_event_checked(
-                &emitter,
-                FINDER_DIRECTORY_OPENED_EVENT,
-                payload.clone(),
-            ) {
-                tracing::info!(
-                    "Finder 目录事件重试恢复：{}（第 {} 次）",
-                    path.display(),
-                    attempt
-                );
+            };
+            let Ok(mut state) = retry_state.lock() else {
+                tracing::error!("Finder 目录事件重试队列锁已损坏，停止后台重试");
                 return;
-            }
-            global_queue().requeue(path.clone());
-            tracing::warn!(
-                "Finder 目录事件重试失败：{}（第 {} 次）",
-                path.display(),
+            };
+            let Some(retry) = state.pending.pop_front() else {
+                state.running = false;
+                return;
+            };
+            retry
+        };
+
+        tokio::time::sleep(retry_delay(retry.attempt)).await;
+        if !global_queue().remove_pending(&retry.path) {
+            tracing::info!(
+                "Finder 目录事件已由前端待处理队列消费，取消后台重试：{}",
+                retry.path.display()
+            );
+            continue;
+        }
+
+        let emitter = crate::web::event_bridge::EventEmitter::Tauri(retry.app.clone());
+        let attempt = retry.attempt.saturating_add(1);
+        if crate::web::event_bridge::emit_event_checked(
+            &emitter,
+            FINDER_DIRECTORY_OPENED_EVENT,
+            retry.payload.clone(),
+        ) {
+            tracing::info!(
+                "Finder 目录事件重试恢复：{}（第 {} 次）",
+                retry.path.display(),
                 attempt
             );
+            continue;
         }
-        tracing::error!(
-            "Finder 目录事件重试次数已用尽，保留失败事件：{}",
-            path.display()
+
+        global_queue().requeue(retry.path.clone());
+        tracing::warn!(
+            "Finder 目录事件重试失败：{}（第 {} 次），将在 {} 毫秒后继续",
+            retry.path.display(),
+            attempt,
+            retry_delay(attempt).as_millis()
         );
-    });
+        let Some(retry_state) = EMIT_RETRY_STATE.get() else {
+            return;
+        };
+        let Ok(mut state) = retry_state.lock() else {
+            tracing::error!("Finder 目录事件重试队列锁已损坏，停止后台重试");
+            return;
+        };
+        state.pending.push_back(EmitRetry { attempt, ..retry });
+    }
 }
 
 #[cfg(feature = "tauri-runtime")]
