@@ -29,6 +29,10 @@ use crate::db::service::app_metadata_service;
 const WEB_SERVICE_TOKEN_KEY: &str = "web_service_token";
 const WEB_SERVICE_PORT_KEY: &str = "web_service_port";
 const WEB_SERVICE_AUTO_START_KEY: &str = "web_service_auto_start";
+// debug 构建用 3082，避免与 release 模式的 3080 冲突
+#[cfg(debug_assertions)]
+pub const DEFAULT_WEB_SERVICE_PORT: u16 = 3082;
+#[cfg(not(debug_assertions))]
 pub const DEFAULT_WEB_SERVICE_PORT: u16 = 3080;
 
 pub struct WebServerState {
