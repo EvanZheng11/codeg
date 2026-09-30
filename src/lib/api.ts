@@ -3336,6 +3336,19 @@ export async function openProjectBootWindow(source?: string): Promise<void> {
 // workspace subscribes via WorkspaceOpenFolderListener.
 export const FOLDER_OPEN_IN_WORKSPACE_EVENT = "folder://open-in-workspace"
 
+/** macOS Finder 打开目录事件，以及冷启动时暂存在 Rust 队列中的目录。 */
+export const FINDER_DIRECTORY_OPENED_EVENT = "finder://directory-opened"
+
+export interface FinderDirectoryOpened {
+  path: string
+}
+
+export async function takePendingFinderDirectories(): Promise<
+  FinderDirectoryOpened[]
+> {
+  return getTransport().call("take_pending_finder_directories")
+}
+
 export async function openFolderInWorkspace(
   path: string
 ): Promise<FolderDetail> {

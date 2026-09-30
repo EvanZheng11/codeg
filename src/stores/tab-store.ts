@@ -270,6 +270,8 @@ export interface TabStoreState {
        *  since the per-group singleton may hand it the group's EXISTING draft
        *  instead of a new tab, that draft is moved to the slot. */
       index?: number
+      /** Finder 每次请求都要创建新的、可见的未发送会话草稿。 */
+      forceNewDraft?: boolean
     }
   ) => OpenedDraftTarget
   openChatModeTab: (options?: {
@@ -1796,12 +1798,14 @@ export const useTabStore = create<TabStoreState>()((set, get) => ({
     // Per-group draft singleton: reuse the target group's existing draft tab
     // (regardless of folder), so each group carries at most one draft.
     const targetGroup = resolveTargetGroup(prevState, options?.targetGroup)
-    const existingTab = prevState.rawTabs.find(
-      (t) =>
-        t.conversationId == null &&
-        groupOfTab(prevState.groupOf, prevState.groupLayout, t.id) ===
-          targetGroup
-    )
+    const existingTab = options?.forceNewDraft
+      ? undefined
+      : prevState.rawTabs.find(
+          (t) =>
+            t.conversationId == null &&
+            groupOfTab(prevState.groupOf, prevState.groupLayout, t.id) ===
+              targetGroup
+        )
 
     if (!existingTab) {
       const newTab: TabItemInternal = {

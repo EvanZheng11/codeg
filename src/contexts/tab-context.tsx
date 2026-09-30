@@ -241,6 +241,7 @@ export interface TabContextValue {
       folderDefaultAgent?: TabItem["agentType"] | null
       targetGroup?: string
       forceAgent?: TabItem["agentType"]
+      forceNewDraft?: boolean
     }
   ) => OpenedDraftTarget
   openChatModeTab: (options?: {

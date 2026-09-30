@@ -23,12 +23,18 @@ vi.mock("@/lib/api", () => ({
   setFolderGroup: vi.fn(),
 }))
 
-const { getFolder, getGitHead, listAllFolderDetails, listOpenFolderDetails } =
-  await import("@/lib/api")
+const {
+  getFolder,
+  getGitHead,
+  listAllFolderDetails,
+  listOpenFolderDetails,
+  openFolder,
+} = await import("@/lib/api")
 const mockGetFolder = vi.mocked(getFolder)
 const mockGetGitHead = vi.mocked(getGitHead)
 const mockListAllFolders = vi.mocked(listAllFolderDetails)
 const mockListOpenFolders = vi.mocked(listOpenFolderDetails)
+const mockOpenFolder = vi.mocked(openFolder)
 
 function makeSummary(
   overrides: Partial<DbConversationSummary> & { id: number }
@@ -145,6 +151,20 @@ function makeFolder(
     ...overrides,
   }
 }
+
+describe("openFolder — 新建与复用同一工作区目录", () => {
+  it("重复打开同一路径时复用同一个工作区记录", async () => {
+    const detail = makeFolder({ id: 7, path: "/repo" })
+    mockOpenFolder.mockResolvedValue(detail)
+
+    await useAppWorkspaceStore.getState().openFolder(detail.path)
+    await useAppWorkspaceStore.getState().openFolder(detail.path)
+
+    expect(mockOpenFolder).toHaveBeenCalledTimes(2)
+    expect(useAppWorkspaceStore.getState().folders).toEqual([detail])
+    expect(useAppWorkspaceStore.getState().allFolders).toEqual([detail])
+  })
+})
 
 describe("refreshFolder — branch null-guard", () => {
   it("keeps the poll-resolved branch when the refreshed row's git_branch is null", async () => {

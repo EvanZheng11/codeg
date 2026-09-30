@@ -572,6 +572,35 @@ describe("TabProvider tab state transitions", () => {
     ).toBe(false)
   })
 
+  it("为 Finder 重复请求创建新的 draft，并沿用目录默认智能体", () => {
+    renderTabs()
+    expect(latestContext).not.toBeNull()
+
+    let first!: OpenedDraftTarget
+    let second!: OpenedDraftTarget
+    act(() => {
+      first = latestContext!.openNewConversationTab(1, "/repo", {
+        folderDefaultAgent: "claude_code",
+        forceNewDraft: true,
+      })
+      second = latestContext!.openNewConversationTab(1, "/repo", {
+        folderDefaultAgent: "claude_code",
+        forceNewDraft: true,
+      })
+    })
+
+    const firstTarget = first
+    const secondTarget = second
+    expect(firstTarget.tabId).not.toBe(secondTarget.tabId)
+    expect(secondTarget.tabId).toBe(latestContext?.activeTabId)
+    expect(
+      latestContext?.tabs.filter((tab) => tab.conversationId == null)
+    ).toHaveLength(2)
+    expect(
+      latestContext?.tabs.every((tab) => tab.agentType === "claude_code")
+    ).toBe(true)
+  })
+
   it("promises the retargeted identity when it reuses the group's draft", () => {
     // Each group keeps a single draft, so the second open retargets the first
     // tab rather than adding one — ASYNCHRONOUSLY. Callers that hand work to the
