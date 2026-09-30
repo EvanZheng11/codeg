@@ -45,6 +45,24 @@ fn queue_holds_repeated_requests_until_frontend_is_ready() {
 }
 
 #[test]
+fn failed_event_keeps_frontend_ready_for_later_requests() {
+    let queue = OpenedPathQueue::new();
+    let failed_path = PathBuf::from("/tmp/codeg-finder-failed");
+    let later_path = PathBuf::from("/tmp/codeg-finder-later");
+
+    assert!(queue.mark_frontend_ready().is_empty());
+    queue.requeue(failed_path.clone());
+
+    assert_eq!(queue.push(later_path), EnqueueResult::Ready);
+    assert!(queue.remove_pending(&failed_path));
+    assert_eq!(
+        queue.push(PathBuf::from("/tmp/codeg-finder-after-recovery")),
+        EnqueueResult::Ready
+    );
+    assert!(queue.mark_frontend_ready().is_empty());
+}
+
+#[test]
 fn event_payload_is_consumable_by_the_frontend() {
     let event = event_for_path(PathBuf::from("/tmp/项目").as_path()).expect("有效 UTF-8 路径");
 

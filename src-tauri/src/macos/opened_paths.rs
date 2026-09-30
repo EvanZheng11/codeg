@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
+#[cfg(feature = "tauri-runtime")]
+use std::time::Duration;
 
 use url::Url;
 
@@ -97,8 +99,19 @@ impl OpenedPathQueue {
             tracing::error!("Finder 目录事件队列锁已损坏，无法重新排队路径");
             return;
         };
-        state.frontend_ready = false;
         state.pending.push(path);
+    }
+
+    pub fn remove_pending(&self, path: &Path) -> bool {
+        let Ok(mut state) = self.state.lock() else {
+            tracing::error!("Finder 目录事件队列锁已损坏，无法移除已恢复路径");
+            return false;
+        };
+        let Some(index) = state.pending.iter().position(|pending| pending == path) else {
+            return false;
+        };
+        state.pending.remove(index);
+        true
     }
 }
 
@@ -167,13 +180,53 @@ fn emit_directory_opened(app: &tauri::AppHandle, path: &Path) {
     if crate::web::event_bridge::emit_event_checked(
         &emitter,
         FINDER_DIRECTORY_OPENED_EVENT,
-        payload,
+        &payload,
     ) {
         tracing::info!("Finder 目录事件已广播：{}", path.display());
     } else {
         tracing::warn!("Finder 目录事件广播失败，保留重试：{}", path.display());
         global_queue().requeue(path.to_path_buf());
+        schedule_emit_retry(app.clone(), path.to_path_buf(), payload);
     }
+}
+
+#[cfg(feature = "tauri-runtime")]
+fn schedule_emit_retry(app: tauri::AppHandle, path: PathBuf, payload: FinderDirectoryOpened) {
+    tauri::async_runtime::spawn(async move {
+        for attempt in 1..=3 {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            if !global_queue().remove_pending(&path) {
+                tracing::info!(
+                    "Finder 目录事件已由前端待处理队列消费，取消后台重试：{}",
+                    path.display()
+                );
+                return;
+            }
+            let emitter = crate::web::event_bridge::EventEmitter::Tauri(app.clone());
+            if crate::web::event_bridge::emit_event_checked(
+                &emitter,
+                FINDER_DIRECTORY_OPENED_EVENT,
+                payload.clone(),
+            ) {
+                tracing::info!(
+                    "Finder 目录事件重试恢复：{}（第 {} 次）",
+                    path.display(),
+                    attempt
+                );
+                return;
+            }
+            global_queue().requeue(path.clone());
+            tracing::warn!(
+                "Finder 目录事件重试失败：{}（第 {} 次）",
+                path.display(),
+                attempt
+            );
+        }
+        tracing::error!(
+            "Finder 目录事件重试次数已用尽，保留失败事件：{}",
+            path.display()
+        );
+    });
 }
 
 #[cfg(feature = "tauri-runtime")]
