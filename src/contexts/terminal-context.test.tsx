@@ -6,6 +6,7 @@ const h = vi.hoisted(() => ({
   terminalKill: vi.fn(async () => {}),
   remoteId: null as number | null,
   windowLabel: "main",
+  activeFolderId: 7 as number | null,
 }))
 
 vi.mock("@/lib/api", () => ({
@@ -21,8 +22,11 @@ vi.mock("@/lib/browser/window-label", () => ({
 }))
 vi.mock("@/contexts/active-folder-context", () => ({
   useActiveFolder: () => ({
-    activeFolder: { id: 7, path: "/tmp/codeg-749" },
-    activeFolderId: 7,
+    activeFolder:
+      h.activeFolderId == null
+        ? null
+        : { id: h.activeFolderId, path: "/tmp/codeg-749" },
+    activeFolderId: h.activeFolderId,
   }),
 }))
 vi.mock("@/hooks/use-shortcut-settings", () => ({
@@ -55,7 +59,25 @@ function Probe() {
       >
         Close
       </button>
+      <button
+        onClick={() => {
+          void terminal.createTerminalInDirectory("/tmp/codeg-749-other", "Dir")
+        }}
+      >
+        Open dir
+      </button>
+      <button
+        onClick={() =>
+          terminal.activeTabId &&
+          terminal.renameTerminal(terminal.activeTabId, "t".repeat(300))
+        }
+      >
+        Rename long
+      </button>
       <span data-testid="tabs">{terminal.tabs.length}</span>
+      <span data-testid="titles">
+        {terminal.tabs.map((tab) => tab.title.length).join(",")}
+      </span>
       <span data-testid="active">{terminal.activeTabId ?? ""}</span>
       <span data-testid="command">
         {terminal.tabs[0]?.initialCommand ?? ""}
@@ -69,6 +91,7 @@ describe("TerminalProvider reload recovery", () => {
     h.terminalKill.mockClear()
     h.remoteId = null
     h.windowLabel = "main"
+    h.activeFolderId = 7
     sessionStorage.clear()
     window.name = ""
   })
@@ -189,5 +212,91 @@ describe("TerminalProvider reload recovery", () => {
       </TerminalProvider>
     )
     expect(screen.getByTestId("tabs")).toHaveTextContent("0")
+  })
+
+  it("restores a tab opened while no workspace tab is active, with the rest", () => {
+    // With no active workspace tab the provider records folder 0 (the
+    // sidebar's "open in terminal" does this). The reader must take back what
+    // the writer wrote, or one such tab costs every tab its way back.
+    const first = render(
+      <TerminalProvider>
+        <Probe />
+      </TerminalProvider>
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Run" }))
+    h.activeFolderId = null
+    first.rerender(
+      <TerminalProvider>
+        <Probe />
+      </TerminalProvider>
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Open dir" }))
+    expect(screen.getByTestId("tabs")).toHaveTextContent("2")
+    first.unmount()
+
+    render(
+      <TerminalProvider>
+        <Probe />
+      </TerminalProvider>
+    )
+    expect(screen.getByTestId("tabs")).toHaveTextContent("2")
+  })
+
+  it("stores an over-long title clamped rather than losing the session", () => {
+    const first = render(
+      <TerminalProvider>
+        <Probe />
+      </TerminalProvider>
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Run" }))
+    fireEvent.click(screen.getByRole("button", { name: "Rename long" }))
+    expect(screen.getByTestId("titles")).toHaveTextContent("300")
+    first.unmount()
+
+    render(
+      <TerminalProvider>
+        <Probe />
+      </TerminalProvider>
+    )
+    expect(screen.getByTestId("tabs")).toHaveTextContent("1")
+    expect(screen.getByTestId("titles")).toHaveTextContent("256")
+  })
+
+  it("drops only the stored tab it cannot validate, and clamps a long title", () => {
+    const pageId = "0b6f3d7e-5a1c-4e2b-9f8a-1c2d3e4f5a6b"
+    const goodId = "3f2c1b0a-9e8d-4c7b-a6f5-e4d3c2b1a098"
+    window.name = `codeg-terminal-page:${pageId}`
+    sessionStorage.setItem(
+      "codeg:terminal-session:v1",
+      JSON.stringify({
+        version: 1,
+        scope: JSON.stringify(["main", null]),
+        pageId,
+        isOpen: true,
+        activeTabId: "not-a-terminal-id",
+        tabs: [
+          {
+            id: "not-a-terminal-id",
+            folderId: 7,
+            title: "forged",
+            workingDir: "/tmp",
+          },
+          {
+            id: goodId,
+            folderId: 7,
+            title: "k".repeat(300),
+            workingDir: "/tmp",
+          },
+        ],
+      })
+    )
+    render(
+      <TerminalProvider>
+        <Probe />
+      </TerminalProvider>
+    )
+    expect(screen.getByTestId("tabs")).toHaveTextContent("1")
+    expect(screen.getByTestId("active").textContent).toBe(goodId)
+    expect(screen.getByTestId("titles")).toHaveTextContent("256")
   })
 })

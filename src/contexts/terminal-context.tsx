@@ -37,8 +37,14 @@ const TERMINAL_SETTINGS_UPDATED_EVENT = "app://terminal-settings-updated"
 const TERMINAL_SESSION_KEY = "codeg:terminal-session:v1"
 const PAGE_NAME_PREFIX = "codeg-terminal-page:"
 const MAX_STORED_TABS = 32
+const MAX_STORED_TITLE_LENGTH = 256
 const UUID_V4 =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+type StoredTerminalTab = Pick<
+  TerminalTab,
+  "id" | "folderId" | "title" | "workingDir" | "shell"
+>
 
 interface StoredTerminalSession {
   version: 1
@@ -46,10 +52,35 @@ interface StoredTerminalSession {
   pageId: string
   isOpen: boolean
   activeTabId: string | null
-  tabs: Pick<
-    TerminalTab,
-    "id" | "folderId" | "title" | "workingDir" | "shell"
-  >[]
+  tabs: StoredTerminalTab[]
+}
+
+/**
+ * Whether one stored tab may come back. Judged per tab, so an entry the reader
+ * rejects costs that tab alone rather than every other tab's way back to its
+ * PTY — and every bound here must admit whatever the writer below persists.
+ */
+function isRestorableTab(tab: unknown): tab is StoredTerminalTab {
+  if (typeof tab !== "object" || tab === null) return false
+  const { id, folderId, title, workingDir, shell } = tab as Record<
+    string,
+    unknown
+  >
+  return (
+    typeof id === "string" &&
+    UUID_V4.test(id) &&
+    // 0 is a real value: a tab opened while no workspace tab is active (the
+    // sidebar's "open in terminal") has no folder to record.
+    Number.isSafeInteger(folderId) &&
+    (folderId as number) >= 0 &&
+    // Any length: it is only a label, clamped on the way in and out.
+    typeof title === "string" &&
+    typeof workingDir === "string" &&
+    workingDir.length > 0 &&
+    workingDir.length <= 4096 &&
+    /^(\/|[A-Za-z]:[\\/]|\\\\)/.test(workingDir) &&
+    (shell === undefined || (typeof shell === "string" && shell.length <= 512))
+  )
 }
 
 function terminalScope(): string {
@@ -97,31 +128,16 @@ function readTerminalSession(): {
       saved.tabs.length > MAX_STORED_TABS
     )
       return empty
-    const tabs: TerminalTab[] = saved.tabs.map((tab) => {
-      if (
-        !UUID_V4.test(tab.id) ||
-        !Number.isSafeInteger(tab.folderId) ||
-        tab.folderId <= 0 ||
-        typeof tab.title !== "string" ||
-        tab.title.length > 256 ||
-        typeof tab.workingDir !== "string" ||
-        tab.workingDir.length === 0 ||
-        tab.workingDir.length > 4096 ||
-        !/^(\/|[A-Za-z]:[\\/]|\\\\)/.test(tab.workingDir) ||
-        (tab.shell !== undefined &&
-          (typeof tab.shell !== "string" || tab.shell.length > 512))
-      ) {
-        throw new Error("invalid terminal tab")
-      }
-      return {
+    const tabs: TerminalTab[] = (saved.tabs as unknown[])
+      .filter(isRestorableTab)
+      .map((tab) => ({
         id: tab.id,
         folderId: tab.folderId,
-        title: tab.title,
+        title: tab.title.slice(0, MAX_STORED_TITLE_LENGTH),
         workingDir: tab.workingDir,
         shell: tab.shell,
         restored: true,
-      }
-    })
+      }))
     return {
       pageId,
       scope,
@@ -209,7 +225,9 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
         .map(({ id, folderId, title, workingDir, shell }) => ({
           id,
           folderId,
-          title,
+          // A rename or a long folder name can run past the reader's bound.
+          // The stored title is only a label until the pane reattaches.
+          title: title.slice(0, MAX_STORED_TITLE_LENGTH),
           workingDir,
           shell,
         })),
