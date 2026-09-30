@@ -52,6 +52,8 @@
       "science": "البحث العلمي",
       "office_tools": "أدوات المكتب",
       "skill_packs": "حزم المهارات",
+      "collaboration": "التعاون",
+      "browser": "المتصفح",
       "quick_messages": "رسائل سريعة",
       "logs": "سجلات التشغيل"
     }
@@ -239,6 +241,8 @@
     "enableProxy": "تفعيل وكيل النظام",
     "proxyAddress": "عنوان الوكيل",
     "proxyHint": "يدعم http(s)/socks5، مثال: {example}. يعمل فقط عند تفعيل وكيل النظام.",
+    "proxyBypass": "تجاوز الوكيل لـ",
+    "proxyBypassHint": "افصل بين الإدخالات بفاصلة إنجليزية <code>,</code> دون مسافات، مثل <code>{example}</code>. يطابق <code>example.com</code> النطاق نفسه، ويطابق <code>.example.com</code> جميع نطاقاته الفرعية، ويمكن أيضًا إدخال عناوين IP. العناوين المحلية <code>localhost,127.0.0.1,::1</code> تتصل مباشرةً دائمًا ولا حاجة إلى إضافتها. تُطبَّق القائمة بوصفها متغير البيئة NO_PROXY.",
     "save": "حفظ",
     "saving": "جارٍ الحفظ...",
     "proxyRequired": "عنوان URL للوكيل مطلوب عند تفعيل الوكيل",
@@ -298,6 +302,8 @@
     "rollbackSuccess": "تم التراجع إلى الإصدار السابق. جارٍ إعادة التحميل...",
     "rollbackFailed": "فشل التراجع. تحقّق من سجلات الخادم.",
     "updateErrors": {
+      "permissionDenied": "تعذّرت الكتابة في {path}، لذا لا يمكن تثبيت التحديثات في مكانها. حدّث يدويًا بصلاحيات المسؤول أو تحقّق من أذونات التثبيت.",
+      "targetWriteFailed": "تعذّرت الكتابة في {path}، لذا لا يمكن تثبيت التحديثات في مكانها: {reason}",
       "sourceUnavailable": "تعذر الوصول إلى مصدر التحديث. تحقق من الشبكة أو الوكيل ثم أعد المحاولة.",
       "network": "فشل اتصال الشبكة. تحقق من الشبكة أو الوكيل ثم أعد المحاولة.",
       "downloadFailed": "فشل تنزيل حزمة التحديث. يرجى المحاولة مرة أخرى لاحقًا.",
@@ -716,13 +722,6 @@
     "emptyNoAgent": "لا يوجد وكيل متاح.",
     "configManagement": "إدارة الإعدادات",
     "envVars": "متغيرات البيئة",
-    "adapterChannel": {
-      "label": "إصدار المحوّل",
-      "description": "يستخدم التثبيت والترقية الإصدار الذي راجعه codeg واعتمده. عند اختيار الأحدث يُثبَّت أحدث إصدار npm للحزمة في حينه؛ وإذا فشل ذلك، يعود codeg إلى الإصدار المعتمد ويوضح ذلك في سجل التثبيت.",
-      "pinned": "الإصدار المعتمد (موصى به)",
-      "latest": "الأحدث (غير مُراجَع)",
-      "latestWarning": "أحدث الإصدارات غير مُراجَعة وقد تعطّل هذا الوكيل في codeg، بل قد يكون الإصدار الأحدث معروفًا بأنه معطوب أحيانًا. تعرض حالة الإصدار ما تم تثبيته فعليًا."
-    },
     "hostTools": {
       "label": "دع الوكيل يتولى الملفات والأوامر بنفسه",
       "description": "يتوقف codeg عن تنفيذ الوصول إلى الملفات وأوامر الطرفية، فينفّذها الوكيل داخل عمليته الخاصة — وعندها فقط تُطبَّق البيئة المعزولة وقواعد الأذونات الخاصة به. كما يُعطَّل التفويض إلى وكلاء آخرين، لأنه سيعيد العمل نفسه عبر codeg. لا يضيف codeg بيئة معزولة من عنده، لذا فعّل هذا الخيار فقط إذا كان الوكيل قد أُعِدّت له واحدة."
@@ -793,6 +792,7 @@
       "saveCodeBuddyConfig": "حفظ إعدادات CodeBuddy",
       "saveKimiCodeConfig": "حفظ إعدادات Kimi Code",
       "customInstall": "تثبيت مخصص",
+      "upgradeToLatest": "الترقية إلى أحدث إصدار غير مُراجَع {version}",
       "saveKimiCodeRawConfig": "Save config.toml",
       "saveDeepSeekConfig": "حفظ إعدادات DeepSeek",
       "diagnose": "تشخيص"
@@ -862,7 +862,11 @@
       "authNotInstalled": "cursor-agent غير مثبّت",
       "authLoggedIn": "تم تسجيل الدخول",
       "authNotLoggedIn": "غير مسجّل الدخول",
+      "authUnverified": "تم تسجيل الدخول — تعذّر التحقق من بيانات الاعتماد",
+      "authUnverifiedHint": "لا يزال cursor-agent يحتفظ بتسجيل دخول، لكن تعذّر استخدامه مع Cursor الآن — وغالبًا ما يعني ذلك انتهاء صلاحية الجلسة. ستفشل الجلسات برسالة \"Authentication required\" حتى تسجّل الدخول من جديد؛ فهذا الـ CLI لا يستطيع تجديد تسجيل دخول المتصفح من تلقاء نفسه.",
+      "authUnverifiedHintApiKey": "لدى cursor-agent مفتاح API مخزَّن، لكن Cursor رفضه للتو — غالبًا لأنه ملغى أو منتهي الصلاحية أو مكتوب خطأ. ستفشل الجلسات برسالة \"Authentication required\" حتى تحفظ مفتاحًا صالحًا بالأسفل.",
       "loginHint": "شغّل هذا الأمر في الطرفية لتسجيل الدخول إلى حساب Cursor (سيفتح المتصفح)، ثم اضغط تحديث:",
+      "loginHintRemote": "شغّل هذا الأمر على مضيف codeg المثبَّت عليه cursor-agent، وليس على هذا الجهاز، ثم اضغط تحديث. عادةً لا يوجد على ذلك المضيف متصفح يمكن فتحه، لذا شغّله مع NO_OPEN_BROWSER=1 فيطبع بدلاً من ذلك رابط تسجيل دخول تفتحه أنت في متصفحك. أما الخادم غير المراقَب فبدّل الطريقة أعلاه إلى مفتاح API.",
       "apiKeyLabel": "مفتاح Cursor API",
       "apiKeyPlaceholder": "المفتاح من cursor.com/dashboard",
       "apiKeyHint": "CURSOR_API_KEY — مفتاح حساب من لوحة تحكم Cursor، بديل لتسجيل الدخول عبر المتصفح للأجهزة بدون واجهة أو الخوادم. ليس مفتاحًا خارجيًا أو من OpenAI.",
@@ -1036,9 +1040,9 @@
       "sandboxMode_read-only": "قراءة فقط",
       "sandboxMode_workspace-write": "الكتابة في مساحة العمل",
       "sandboxMode_danger-full-access": "وصول كامل (بدون عزل)",
-      "sandboxModeReadOnlyAcpWarning": "لم يعد محوّل ACP يوفّر بيئة معزولة للقراءة فقط، لذا تعمل جلسات codeg بصلاحية الكتابة في مساحة العمل مهما كان الاختيار هنا. يختار codeg أشد إعداد متاح — إذ يُعرض عليك كل تصعيد للصلاحيات للموافقة — لكن التعديلات داخل مساحة العمل لم تعد تحتاج موافقة. أما جلسات codex CLI وبيئة التطوير فما زالت تحترم وضع القراءة فقط.",
+      "sandboxModeReadOnlyAcpWarning": "لا يوفّر codex-acp من 1.7 إلى 1.13 بيئة معزولة للقراءة فقط، لذا تعمل جلسة codeg على هذه الإصدارات بصلاحية الكتابة في مساحة العمل مهما كان الاختيار هنا، مع بقاء كل تصعيد للصلاحيات معروضاً عليك للموافقة. أعاد codex-acp 2.0 هذه البيئة، فحدّث المحوّل إن كان المثبّت أقدم. أما جلسات codex CLI وبيئة التطوير فتحترم وضع القراءة فقط دائماً.",
       "sandboxModeHint": "على Windows، تُخفَّض الكتابة في مساحة العمل إلى قراءة فقط ما لم تُفعَّل بيئة العزل التجريبية الخاصة بـ codex.",
-      "sandboxModeSeedsPresetHint": "يربط codeg هذا أيضاً بإعداد الموافقة الذي تبدأ به الجلسة، فهو — بخلاف سياسة الموافقة — يؤثر على الطلبات العادية. لاحظ أن الإعداد الافتراضي للمحوّل صار يجعل نموذجاً يفرز طلبات تصعيد الصلاحيات ولا يمرّر إلا ما يراه غير آمن؛ اختر «طلب الموافقة» في مربع الكتابة لمراجعتها كلها بنفسك. ويظل إعداد مربع الكتابة هو الغالب دائماً.",
+      "sandboxModeSeedsPresetHint": "يربط codeg هذا أيضاً بإعداد الموافقة الذي تبدأ به الجلسة، فهو — بخلاف سياسة الموافقة — يؤثر على الطلبات العادية. القراءة فقط تبدأ بإعداد «Read-only». ومع سياسة الموافقة never يبدأ الوصول الكامل بإعداد «Full access» والكتابة في مساحة العمل بإعداد «Auto review»، حيث يفرز نموذجٌ طلبات التصعيد ولا يمرّر إلا ما يراه غير آمن. ومع أي سياسة موافقة أخرى تبدأ الكتابة في مساحة العمل والوصول الكامل بإعداد «Workspace access» الذي يعرض عليك كل تصعيد للصلاحيات في codex-acp 2.0 وما بعده، وبإعداد «Auto review» في المحوّلات الأقدم. وإن لم يُضبط يبقى الإعداد الافتراضي للمحوّل «Auto review». ويظل إعداد مربع الكتابة هو الغالب دائماً.",
       "writableRootsLabel": "مجلدات إضافية قابلة للكتابة",
       "writableRootsHint": "مسار مطلق واحد في كل سطر، إضافةً إلى مجلد العمل.",
       "sandboxRootsRelativeError": "يجب أن يكون مسارًا مطلقًا — يحسم codex المسارات النسبية داخل ~/.codex: {path}",
@@ -1375,6 +1379,7 @@
       "haikuDefaultModel": "نموذج Haiku الافتراضي",
       "sonnetDefaultModel": "نموذج Sonnet الافتراضي",
       "opusDefaultModel": "نموذج Opus الافتراضي",
+      "fableDefaultModel": "نموذج Fable الافتراضي",
       "customModelOption": "معرّف النموذج المخصّص",
       "customModelOptionName": "اسم النموذج المخصّص",
       "customModelOptionDescription": "وصف النموذج المخصّص",
@@ -1393,7 +1398,9 @@
       "customInstallDescription": "أدخل الإصدار المراد تثبيته. سيؤدي ذلك إلى إعادة التثبيت واستبدال الإصدار المثبت حاليًا.",
       "customInstallVersionLabel": "رقم الإصدار",
       "customInstallInvalid": "أدخل رقم إصدار صالحًا، مثل 1.2.3.",
-      "customInstallSubmit": "تثبيت"
+      "customInstallSubmit": "تثبيت",
+      "confirmUpgradeToLatest": "ترقية {name} إلى الإصدار غير المُراجَع {version}؟",
+      "confirmUpgradeToLatestDescription": "لم يراجع codeg هذا الإصدار، وقد يعطّل {name} في codeg، بل قد يكون الإصدار معروفًا بأنه معطوب أحيانًا. للرجوع، استخدم التثبيت المخصص لإعادة تثبيت الإصدار الموصى به {recommendedVersion}."
     },
     "errors": {
       "windowsFileLocked": "ملفات {name} قيد الاستخدام بواسطة جلسة قيد التشغيل، لذا لا يمكن لـ Windows استبدالها. أغلق جميع جلسات {name} ثم حاول مرة أخرى.",
@@ -1482,7 +1489,7 @@
     "version": {
       "statusLabel": "حالة الإصدار",
       "notInstalled": "غير مثبت",
-      "remoteLocal": "البعيد: {remoteVersion} · المحلي: {localVersion}",
+      "recommendedLocal": "الموصى به: {recommendedVersion} · المحلي: {localVersion}",
       "localOnly": "المحلي: {localVersion}",
       "localInstalled": "{versionText}. مثبت.",
       "platformUnsupported": "{versionText}. المنصة الحالية لا تدعم هذا الوكيل.",
@@ -1490,9 +1497,9 @@
       "clickInstall": "{versionText}. انقر تثبيت في الجهة اليمنى.",
       "localUnrecognized": "{versionText}. الإصدار المحلي غير قابل للمقارنة؛ جرّب الترقية للكتابة فوق التثبيت.",
       "upgradeAvailable": "{versionText}. تتوفر ترقية.",
-      "remoteUnavailable": "{versionText}. الإصدار البعيد غير متاح حاليًا.",
+      "recommendedUnavailable": "{versionText}. لا يتوفر إصدار موصى به.",
       "latest": "{versionText}. أنت على أحدث إصدار.",
-      "latestChannel": "{versionText}. قناة الأحدث مفعّلة؛ الترقية تثبّت أحدث إصدار."
+      "unreviewedAvailable": "{versionText}. يتوفر إصدار أحدث غير مُراجَع."
     },
     "adapter": {
       "label": "محوّل ACP",
@@ -1542,7 +1549,8 @@
         "medium": "متوسط",
         "high": "مرتفع",
         "minimal": "الحد الأدنى",
-        "xhigh": "مرتفع جدًا"
+        "xhigh": "مرتفع جدًا",
+        "max": "أقصى"
       },
       "apiKeyLabel": "مفتاح API",
       "apiKeyHint": "يُحفظ في ~/.pi/agent/auth.json للمزوّد المحدد.",
@@ -1556,7 +1564,9 @@
       "modeCustom": "pi مخصّص",
       "modeCustomHint": "شغّل بناء pi أو تثبيته أو غلافه الخاص بك.",
       "commandLabel": "أمر pi أو مساره",
-      "commandHint": "مسار مطلق، أو اسم أمر في PATH، أو نص غلاف (مثل ./pi-test.sh في monorepo).",
+      "commandHint": "استخدم مساراً مطلقاً أو اسم أمر في PATH.",
+      "relativeCommandPath": "استخدم مساراً مطلقاً لأمر Pi أو اسم أمر في PATH.",
+      "relativeAgentDir": "استخدم مساراً مطلقاً لمجلد وكيل Pi أو ~/...؛ تختلف المسارات النسبية حسب مجلد العمل.",
       "commandNotFound": "الأمر غير موجود",
       "validate": "تحقّق",
       "advanced": "متقدّم",
@@ -1597,7 +1607,14 @@
       "levelsEmptyError": "اختر مستوى واحدًا على الأقل — بدون أي مستوى يعود pi إلى Off.",
       "wireValuesTitle": "متقدم: القيم المرسلة إلى المزوّد",
       "wireValuesHint": "اتركه فارغًا لإرسال اسم المستوى كما هو. اضبطه عندما تتوقع نقطة النهاية صيغة أخرى — الواجهات على نمط Google تحتاج LOW / HIGH.",
-      "defaultLevelUnlisted": "هذا المستوى ليس ضمن القائمة أعلاه — سيخفّضه pi."
+      "defaultLevelUnlisted": "هذا المستوى ليس ضمن القائمة أعلاه — سيخفّضه pi.",
+      "modelLevels": "يوفّر {model}: {levels}.",
+      "modelNoThinking": "لا يملك {model} مستويات تفكير — يشغّله Pi دائمًا مع إيقاف التفكير.",
+      "levelClamped": "لا يوفّر {model} المستوى {level}، لذا يشغّله Pi بالمستوى {effective}. تظل النماذج التي توفّر {level} تستخدمه.",
+      "modelNotListed": "لا يعرض Pi هذا النموذج لهذا المزوّد. تحقّق من معرّف النموذج — لا يعرض Pi إلا المزوّدين الذين لديه مفتاح API أو تسجيل دخول لهم.",
+      "catalogUnavailable": "تعذّر سؤال Pi عن مستويات التفكير التي يوفّرها هذا النموذج.",
+      "configLoadFailed": "تعذّرت قراءة إعدادات Pi: {message}",
+      "runtimeTooOld": "إصدار Pi هذا قديم جدًا: يحتاج Codeg إلى Pi {min} أو أحدث لفتح جلسة. حدّثه أولًا."
     },
     "addCustomAgent": "إضافة وكيل مخصص",
     "addCustomAgentHint": "سجّل أي وكيل متوافق مع ACP. اختر واحدًا من سجل ACP العام، أو الصق معلومات السجل الخاصة به.",
@@ -1706,9 +1723,9 @@
   "GeneralSettings": {
     "loading": "جارٍ التحميل...",
     "sectionTitle": "عام",
-    "sectionDescription": "تفضيلات موحّدة للطرفية الافتراضية وتسريع العرض والإشعارات وتفويض الوكلاء المتعدّدين.",
+    "sectionDescription": "تفضيلات موحّدة للطرفية الافتراضية وتسريع العرض وسلوك إغلاق النافذة والإشعارات والأصوات.",
     "terminalTitle": "الطرفية الافتراضية",
-    "terminalDescription": "اختر الصدفة المستخدمة عند فتح علامات تبويب طرفية جديدة من شريط الطرفية أو شجرة الملفات. تستخدمها الوكلاء أيضًا عندما تطلب من codeg تنفيذ سطر أوامر كامل نيابةً عنها.",
+    "terminalDescription": "اختر الصدفة التي يشغّلها codeg لعلامات تبويب الطرفية الجديدة ولأسطر الأوامر الكاملة التي تطلب الوكلاء تنفيذها نيابةً عنها. أما الوكلاء الذين يملكون صدفة خاصة بهم (مثل Codex و Claude Code) فينفّذون الأوامر داخل عملياتهم، ولا يصل إليهم هذا الإعداد.",
     "terminalSystemDefault": "افتراضي النظام",
     "terminalPowerShell7": "PowerShell 7 (pwsh)",
     "terminalWindowsPowerShell": "Windows PowerShell",
@@ -1731,6 +1748,10 @@
     "restartNow": "إعادة التشغيل الآن",
     "restartFailed": "فشل إعادة التشغيل: {message}",
     "loadFailed": "فشل التحميل: {message}"
+  },
+  "CollaborationSettings": {
+    "sectionTitle": "التعاون",
+    "sectionDescription": "كيفية تعاون الوكلاء فيما بينهم، وأدوات codeg التي يمكنهم الوصول إليها داخل المحادثة."
   },
   "LoginPage": {
     "documentTitle": "تسجيل الدخول - codeg",
@@ -1977,7 +1998,7 @@
       "tasks": "المهام قيد الانتظار",
       "loadingSubsessions": "جارٍ تحميل المحادثات الفرعية…",
       "forge": "لوحة المستودع",
-      "canvas": "محادثات لا نهائية",
+      "canvas": "لوحة لا نهائية",
       "folderGroup": {
         "newGroup": "مجموعة جديدة",
         "newGroupTitle": "مجموعة مجلدات جديدة",
@@ -1993,7 +2014,12 @@
         "removeFromGroup": "بدون مجموعة",
         "newGroupAndMove": "مجموعة جديدة…",
         "dropToUngroup": "أفلِت هنا لإزالته من المجموعة"
-      }
+      },
+      "recentFilterAll": "الكل",
+      "recentFilterTitle": "عرض في الأحدث: {filter}",
+      "noRecentChats": "لا توجد محادثات دردشة حديثة",
+      "noRecentFolders": "لا توجد محادثات مجلدات حديثة",
+      "recentFilterMenuLabel": "عرض في الأحدث"
     },
     "conversation": {
       "reloadFailed": "فشل إعادة تحميل المحادثة: {message}",
@@ -2804,6 +2830,11 @@
       "linkedFolder": "مجلد مرتبط",
       "moreActions": "المزيد من الإجراءات",
       "copyPath": "نسخ المسار",
+      "copy": "نسخ",
+      "copyRelativePath": "المسار النسبي",
+      "copyAbsolutePath": "المسار المطلق",
+      "copyFileItself": "الملف نفسه",
+      "copyDirectoryItself": "المجلد نفسه",
       "upload": "رفع ملفات/مجلد",
       "download": "تنزيل ملف",
       "downloadAsZip": "تنزيل كملف ZIP",
@@ -2841,7 +2872,9 @@
         "downloadFailed": "فشل تنزيل {name}",
         "downloadSaved": "تم تنزيل {name}",
         "pathCopied": "تم نسخ المسار",
-        "copyPathFailed": "فشل نسخ المسار"
+        "copyPathFailed": "فشل نسخ المسار",
+        "fileCopied": "تم نسخ {name}",
+        "copyFileFailed": "فشل نسخ {name}"
       },
       "createDialog": {
         "newFile": "ملف جديد",
@@ -2989,8 +3022,6 @@
           "openAgentsSettings": "فتح إعدادات الوكلاء",
           "retry": "إعادة المحاولة"
         },
-        "agentsSetupHint": "افتح الإعدادات > الوكلاء لإدارة التثبيت.",
-        "withSetupHint": "{message}\n{hint}",
         "blocked": {
           "missingConfig": "تعذر قراءة إعدادات الوكيل الحالية.",
           "disabled": "{agent} معطّل في إعدادات الوكلاء. قم بتمكينه قبل الاتصال.",
@@ -3013,16 +3044,21 @@
           "turnFailedMaxTurnRequests": "بلغ {agent} الحد الأقصى لعدد الطلبات المسموح بها في هذه الجولة.",
           "turnFailedUnknown": "أنهى {agent} الجولة بسبب توقف غير معروف.",
           "turnFailedAuthRequired": "يحتاج {agent} إلى تسجيل دخولك من جديد قبل تنفيذ هذه الجولة. سجّل الدخول من الإعدادات ثم أعد إرسال الرسالة.",
+          "agentAuthRequired": "تعذّر على {agent} بدء جلسة: لا توجد بيانات اعتماد صالحة للاستخدام. سجّل الدخول من جديد عبر الإعدادات ← الوكلاء ← {agent}، ثم أعد فتح هذه المحادثة.",
+          "agentRuntimeOutdated": "{agent} قديم جدًا بالنسبة إلى هذا الإصدار من Codeg. حدّثه، ثم أعد فتح هذه المحادثة.",
           "grokModelSwitchIncompatibleAgent": "لا يمكن لـ {agent} التبديل إلى هذا النموذج في محادثة قائمة. ابدأ جلسة جديدة لاستخدامه.",
+          "setModeFailed": "تعذّر على {agent} تبديل الوضع.",
+          "setConfigOptionFailed": "تعذّر على {agent} تطبيق هذا الإعداد.",
+          "goalControlFailed": "تعذّر على {agent} تحديث الهدف.",
+          "imageDropped": "لم تصل إحدى الصور المرفقة إلى {agent}.",
+          "sessionLoadFallback": "تعذّر على {agent} استعادة الجلسة السابقة فبدأ جلسة جديدة، ولم يعد السياق السابق متاحًا.",
           "turnFailedEmpty": "أنهى {agent} الجولة دون إنتاج أي رد.",
           "turnFailedEmptyProtocol": "أنتج {agent} مخرجات تعذّر على codeg تحليلها — قد لا يتوافق إصدار الوكيل مع البروتوكول.",
-          "turnFailedEmptyMetadata": "أرسل {agent} تحديثات حالة فقط في هذه الجولة (الخطة / الوضع / الاستخدام) دون أي رد.",
-          "detailsInAlerts": "افتح التنبيهات في شريط الحالة ووسّع التفاصيل لعرض مخرجات الوكيل."
+          "turnFailedEmptyMetadata": "أرسل {agent} تحديثات حالة فقط في هذه الجولة (الخطة / الوضع / الاستخدام) دون أي رد."
         },
         "unableReadAgentConfig": "تعذر قراءة إعدادات الوكيل: {message}",
         "connectFailedTitle": "فشل اتصال {agent}",
         "toolFallbackTitle": "أداة",
-        "eventErrorTitle": "خطأ الوكيل",
         "notificationTurnComplete": "{agent} أنهى الاستجابة",
         "notificationError": "{agent} خطأ: {message}",
         "notificationQuestion": "{agent} ينتظر إجابتك",
@@ -3039,7 +3075,9 @@
           "lineNoErrorWithDelay": "{retry}، {delay}",
           "httpStatus": " (HTTP {status})"
         },
-        "configOptionAdjusted": "ضبط {agent} {option} على {actual} بدلاً من {requested}"
+        "configOptionAdjusted": "ضبط {agent} {option} على {actual} بدلاً من {requested}",
+        "noticeTitle": "{agent}: {title}",
+        "pluginLoadFailedTitle": "تعذّر على {agent} تحميل {count} من الإضافات"
       },
       "connectionLifecycle": {
         "tasks": {
@@ -3494,6 +3532,7 @@
             "child_max_turn_requests": "الوكيل الفرعي: حد الطلبات",
             "child_empty": "الوكيل الفرعي بدون استجابة",
             "child_auth_required": "الوكيل الفرعي يحتاج تسجيل دخول",
+            "child_rejected": "الوكيل الفرعي رفض الطلب",
             "child_unknown": "الوكيل الفرعي: خطأ",
             "unknown": "مهمة غير معروفة"
           }
@@ -3676,7 +3715,22 @@
           "outputMissing": "اقتطع codex مُخرَج النص البرمجي وأزال الفاصل الخاص بهذا الأمر، لذا تعذّر نسب أي مُخرَج إليه.",
           "sharedWith": "يحتوي هذا المقطع أيضًا على مُخرَج {commands} — إذ اقتطع codex الفواصل الخاصة بها.",
           "truncated": "مقتطع"
-        }
+        },
+        "visualizeTitle": "تصوّر بياني",
+        "visualizeWide": "عريض",
+        "visualizeLoading": "جارٍ تحميل التصوّر البياني…",
+        "visualizeError": "تعذّر تحميل التصوّر البياني",
+        "visualizeReload": "إعادة التحميل",
+        "visualizeOpenFile": "فتح الملف",
+        "visualizeExpand": "عرض الكل",
+        "visualizeCollapse": "عرض أقل",
+        "visualizeScriptsOn": "البرامج النصية مفعّلة",
+        "visualizeScriptsOff": "تفعيل البرامج النصية",
+        "visualizeScriptsHint": "تشغيل البرامج النصية للتصوّر البياني ليصبح تفاعليًا. يعمل داخل بيئة معزولة ولا يمكنه الوصول إلى الشبكة أو ملفاتك.",
+        "visualizeFrameTitle": "تصوّر بياني من Codex",
+        "htmlPreviewOpen": "معاينة",
+        "htmlPreviewOpenAria": "معاينة {name}",
+        "htmlPreviewHide": "إخفاء المعاينة"
       },
       "messageNav": {
         "title": "تنقل الرسائل",
@@ -3764,7 +3818,6 @@
         "reconnecting": "جارٍ إعادة الاتصال…",
         "reconnectDisabledDuringTurn": "متاح بعد انتهاء الدور الحالي",
         "dismiss": "تجاهل",
-        "reconnectFailed": "فشل في إعادة الاتصال بالجلسة",
         "applied": "تم تطبيق الإعدادات الجديدة"
       },
       "piProjectTrust": {
@@ -3818,6 +3871,7 @@
         "compacted": "تم ضغط السياق",
         "compactedTokens": "تم ضغط السياق · {before} → {after} رمز",
         "failed": "فشل ضغط السياق",
+        "summary": "الملخص",
         "triggerManual": "تم التشغيل يدويًا",
         "triggerAutomatic": "تم التشغيل تلقائيًا"
       },
@@ -4201,13 +4255,14 @@
     "agentTypeRequired": "نوع الوكيل مطلوب.",
     "agentTypeImmutableHint": "لا يمكن تغيير نوع الوكيل بعد الإنشاء.",
     "model": "النموذج",
-    "modelPlaceholderCodex": "gpt-5.6-sol / gpt-5.5",
+    "modelPlaceholderCodex": "gpt-6.1-sol / gpt-6-luna",
     "modelPlaceholderGemini": "gemini-3-pro-preview",
     "claudeMainModel": "النموذج الرئيسي",
     "claudeReasoningModel": "نموذج الاستدلال (التفكير)",
     "claudeHaikuDefaultModel": "نموذج Haiku الافتراضي",
     "claudeSonnetDefaultModel": "نموذج Sonnet الافتراضي",
     "claudeOpusDefaultModel": "نموذج Opus الافتراضي",
+    "claudeFableDefaultModel": "نموذج Fable الافتراضي",
     "claudeCustomModelOption": "معرّف النموذج المخصّص",
     "claudeCustomModelOptionName": "اسم النموذج المخصّص",
     "claudeCustomModelOptionDescription": "وصف النموذج المخصّص",
@@ -4651,7 +4706,8 @@
     "none": "لا توجد فروع",
     "local": "محلي",
     "remote": "بعيد",
-    "useCustom": "استخدام \"{query}\""
+    "useCustom": "استخدام \"{query}\"",
+    "head": "HEAD"
   },
   "BackupSettings": {
     "tabs": {
@@ -5024,6 +5080,7 @@
   "BrowserSettings": {
     "title": "المتصفح المدمج",
     "description": "يمكن عرض صفحات الويب المفتوحة من المحادثات ونتائج الأدوات والطرفية كعلامات تبويب بجانب ملفاتك دون مغادرة التطبيق.",
+    "descriptionWeb": "في جلسة المتصفح، تُفتح صفحات الويب في المتصفح الذي تستخدمه بالفعل. الاستثناء هو خادم يعمل على مضيف codeg: يُمرَّر إلى علامة تبويب هنا. هذه هي الإعدادات التي لا يزال لها أثر.",
     "defaultTargetTitle": "مكان فتح الروابط",
     "defaultTargetHint": "يُضبط لكل مصدر على حدة. اضغط ⌘/Ctrl مع النقر على رابط لاستخدام الخيار الآخر لهذه المرة فقط.",
     "sourceTranscript": "رسائل المحادثة",
@@ -5063,6 +5120,7 @@
     "downloadsHint": "تُحفظ الملفات التي تنزّلها الصفحة في {dir}. لا يُفتح أي ملف تلقائيًا، ولا يُستبدل ملف موجود أبدًا.",
     "rulesTitle": "قواعد المواقع",
     "rulesHint": "لكل موقع: دائمًا المتصفح المدمج، أو دائمًا متصفح النظام، أو الحظر. الأنماط هي اسم مضيف أو *.example.com أو *، مع :منفذ اختياري؛ وتفوز المطابقة الأكثر تحديدًا.",
+    "rulesHintWeb": "لكل موقع: الحظر. مكان فتح الرابط ليس خيارًا في جلسة المتصفح. الأنماط هي اسم مضيف أو *.example.com أو *، مع :منفذ اختياري؛ وتفوز المطابقة الأكثر تحديدًا.",
     "serviceOpenTitle": "الخوادم المحلية",
     "serviceOpenHint": "عند طباعة خادم شغّلته في الطرفية لعنوانه، افتحه في علامة تبويب المتصفح. العناوين على هذا الجهاز فقط، وفقط عندما يكون هناك ما يستمع عليها.",
     "serviceOpenOff": "لا تفعل شيئًا",
@@ -5423,7 +5481,6 @@
     "promptPlaceholder": "صف المهمة للوكيل — استخدم @ للإشارة إلى الملفات و / للأوامر",
     "folderPlaceholder": "اختر مجلدًا",
     "baseBranch": "الفرع الأساسي",
-    "baseBranchPlaceholder": "الفرع الحالي",
     "baseBranchDefault": "الفرع الحالي عند بدء المهمة",
     "baseBranchHint": "تتفرّع المهمة من هذا الفرع، ويعيدها الدمج إليه.",
     "agentInheritedHint": "موروث من إعدادات المهام — عدِّله ليصبح خاصًا بهذه المهمة",
@@ -5555,8 +5612,8 @@
     "eventContextCompact": "ضغط السياق",
     "eventUserAction": "إجراء المستخدم",
     "eventDiffStat": "لقطة التغييرات",
-    "eventForgeWriteback": "تم التعليق على المشكلة",
-    "eventForgeWritebackFailed": "فشل التعليق على المشكلة",
+    "eventForgeWriteback": "تم التعليق على العنصر",
+    "eventForgeWritebackFailed": "فشل التعليق على العنصر",
     "actionDeliverPr": "فتح طلب سحب",
     "actionDeliverPrMr": "فتح طلب دمج",
     "actionDeliverPrBack": "ادفع إلى طلب السحب",
@@ -6090,7 +6147,7 @@
     "scenarioPlanFirst": "الخطة أولاً",
     "scenarioPlanFirstHint": "يتأكد الوكيل من أن المشكلة حقيقية ثم يقدّم خطة تنفيذ ويتوقف — وافق عليها بإعادة المهمة لتنفيذها.",
     "scenarioReviewFix": "مراجعة وإصلاح",
-    "scenarioReviewFixHint": "يراجع التغييرات ويصلح المشكلات فوقها؛ وعند القبول تُدفع الإيداعات إلى الفرع نفسه.",
+    "scenarioReviewFixHint": "يحكم الوكيل أولاً على ما إذا كان النهج نفسه سليماً، ولا يصلح المشكلات فوقه إلا إذا كان كذلك؛ وإلا فلا يودِع شيئاً ويعيد إليك المراجعة لتقرر. وعند القبول تُدفع الإصلاحات إلى الفرع نفسه.",
     "scenarioReviewOnly": "مراجعة فقط",
     "scenarioReviewOnlyHint": "تقرير مراجعة بالملاحظات والاقتراحات دون أي إيداع — أعد المهمة إذا أردت تطبيق الإصلاحات.",
     "settingsTitle": "إعدادات اللوحة",
@@ -6118,7 +6175,7 @@
     "save": "حفظ"
   },
   "Canvas": {
-    "title": "محادثات لا نهائية",
+    "title": "لوحة لا نهائية",
     "untitled": "محادثة بلا عنوان",
     "unresolvedConversation": "تم حذف المحادثة",
     "removeCard": "إزالة البطاقة",
@@ -6206,7 +6263,36 @@
     "removeTerminalCard": "إزالة بطاقة الطرفية",
     "terminalNoDirectory": "لا يوجد دليل عمل لهذه البطاقة",
     "confirmDeleteTerminals": "سيتم إغلاق {count} من الطرفيات قيد التشغيل وإنهاء عملياتها.",
-    "confirmDeleteNotesAndTerminals": "سيتم حذف {notes} من الملاحظات التي كتبتها نهائيًا، وإنهاء {terminals} من الطرفيات قيد التشغيل."
+    "confirmDeleteNotesAndTerminals": "سيتم حذف {notes} من الملاحظات التي كتبتها نهائيًا، وإنهاء {terminals} من الطرفيات قيد التشغيل.",
+    "boardsTitle": "اللوحات",
+    "boardsSubtitle": "كل لوحة مساحة لا نهائية مستقلة تضم مناطق وبطاقات محادثات وملاحظات وملفات وطرفيات.",
+    "boardCount": "{count, plural, =0 {لا توجد لوحات} one {لوحة واحدة} two {لوحتان} few {# لوحات} many {# لوحة} other {# لوحة}}",
+    "newBoard": "لوحة جديدة",
+    "newBoardTitle": "لوحة جديدة",
+    "editBoard": "تعديل اللوحة…",
+    "editBoardTitle": "تعديل اللوحة",
+    "deleteBoard": "حذف اللوحة…",
+    "openBoard": "فتح",
+    "boardMenu": "خيارات اللوحة",
+    "boardName": "الاسم",
+    "boardDescription": "الوصف",
+    "boardDescriptionPlaceholder": "ما الغرض من هذه اللوحة؟ (اختياري)",
+    "untitledBoard": "لوحة بلا عنوان",
+    "boardItemCount": "{count, plural, =0 {فارغة} one {عنصر واحد} two {عنصران} few {# عناصر} many {# عنصرًا} other {# عنصر}}",
+    "boardEditedAt": "عُدّلت {time}",
+    "boardsEmpty": "لا توجد لوحات بعد",
+    "boardsEmptyHint": "أنشئ لوحة لتنظيم عملك مكانيًا. لكل لوحة مناطقها وبطاقاتها وملاحظاتها الخاصة.",
+    "searchBoards": "البحث في اللوحات…",
+    "noBoardsMatch": "لا توجد لوحات تطابق «{query}»",
+    "boardsLoadFailed": "تعذّر تحميل اللوحات",
+    "retry": "إعادة المحاولة",
+    "backToBoards": "العودة إلى كل اللوحات",
+    "boardDeleted": "تم حذف هذه اللوحة",
+    "deleteBoardTitle": "حذف هذه اللوحة؟",
+    "deleteBoardDescription": "سيتم حذف «{name}» وكل ما عليها نهائيًا. لن تتأثر المحادثات والمجلدات والملفات التي تعرضها.",
+    "deleteBoardItems": "تحتوي على {count, plural, one {عنصر واحد} two {عنصرين} few {# عناصر} many {# عنصرًا} other {# عنصر}}.",
+    "deleteBoardTerminals": "سيتم إغلاق {count, plural, one {طرفية واحدة} two {طرفيتين} few {# طرفيات} many {# طرفية} other {# طرفية}} عليها وإنهاء عملياتها.",
+    "deleteBoardConfirm": "حذف اللوحة"
   },
   "Browser": {
     "toolbar": {
@@ -6243,6 +6329,7 @@
       "ownedWindow": "تُعرض هذه الصفحة في نافذة مستقلة.",
       "ownedWindowShow": "إظهار النافذة",
       "remoteBanner": "فُتح عبر {host}",
+      "remoteBannerDown": "انقطع الاتصال بـ {host}. ستتم إعادة المحاولة مع الطلب التالي.",
       "navigationBlocked": "تم حظر الانتقال: {host}",
       "navigationBlockedRule": "محظور بقاعدة موقع",
       "navigationBlockedScheme": "لا يمكن فتح هذا النوع من العناوين هنا",
@@ -6256,7 +6343,17 @@
       "agentGrantLost": "انتهت المشاركة: غادرت الصفحة {origin}",
       "agentGrantLostShare": "شارك {origin} أيضًا",
       "agentGrantReplaced": "انتهت المشاركة: يخدم برنامج آخر {origin} الآن",
-      "agentGrantReplacedShare": "شارك على أي حال"
+      "agentGrantReplacedShare": "شارك على أي حال",
+      "errorRemoteRefused": "لا شيء يستمع على هذا العنوان في المضيف البعيد",
+      "errorRemoteRefusedHint": "رفض {host} الاتصال. تحقّق من أن الخادم الموجود خلف هذا العنوان يعمل هناك.",
+      "errorRemoteUnreachable": "لا يستطيع المضيف البعيد الوصول إلى هذا العنوان",
+      "errorRemoteUnreachableHint": "من جهة {host}، لا يمكن تحليل الاسم أو لا يوجد مسار إليه.",
+      "errorRemoteNotAllowed": "لا يفتح الخادم البعيد هذا العنوان للمتصفح",
+      "errorRemoteNotAllowedHint": "يسمح codeg-server على {host} لنفق المتصفح بالوصول إلى العناوين الخاصة فقط (CODEG_BROWSER_TUNNEL=private).",
+      "errorRemoteTimeout": "استغرق المضيف البعيد وقتًا طويلًا للاتصال",
+      "errorRemoteTimeoutHint": "لم يتلقَّ {host} ردًا من هذا العنوان في الوقت المحدد. قد يكون الخادم هناك مشغولًا أو خلف جدار حماية.",
+      "errorTunnelDown": "الاتصال بالمضيف البعيد مقطوع",
+      "errorTunnelDownHint": "النفق إلى {host} لا ينقل أي شيء حاليًا. أعد المحاولة عندما يصبح متاحًا مرة أخرى."
     },
     "tab": {
       "untitled": "علامة تبويب جديدة"
@@ -6276,7 +6373,22 @@
       "copied": "تم نسخ العنوان",
       "unreachableTitle": "تعذّر الوصول إلى منفذ الجسر",
       "unreachableHint": "وضع خادم codeg هذه الصفحة على {origin}، لكن متصفحك لا يستطيع الوصول إليه. انشر هذا المنفذ (راجع CODEG_BRIDGE_PORTS) أو اضبط CODEG_BRIDGE_PUBLIC_HOST؛ وإذا كان codeg يُقدَّم عبر HTTPS فإن منافذ الجسر تحتاج إلى HTTPS أيضًا.",
+      "unreachableHostHint": "وضع خادم codeg هذه الصفحة على {origin}، لكن متصفحك لا يستطيع الوصول إليها. يجب أن يُترجَم اسم المضيف هذا إلى خادم codeg وأن يمر عبر الوكيل الموجود أمامه: سجل DNS بحرف بدل ومضيف افتراضي بحرف بدل (راجع CODEG_BRIDGE_HOST_PATTERN).",
       "errorTitle": "لا يمكن عرض هذه الصفحة هنا"
+    },
+    "remote": {
+      "title": "هذا العنوان على {host}",
+      "titleUnnamed": "هذا العنوان على المضيف البعيد",
+      "description": "يشير إلى الجهاز الذي تعمل عليه مساحة العمل هذه، لا إلى هذا الكمبيوتر.",
+      "copyAddress": "نسخ العنوان",
+      "copied": "تم نسخ العنوان",
+      "tryHost": "تجربة {host}",
+      "tryHostHint": "يفتح {address} في علامة تبويب على هذا الجهاز. ينجح ذلك إذا كانت الصفحة هناك تستمع على جميع واجهات الشبكة وكان هذا الجهاز يصل إلى منفذها.",
+      "openHere": "فتح على هذا الجهاز",
+      "openHereHint": "يفتح العنوان في علامة تبويب على هذا الجهاز. ينجح ذلك إذا كان هذا الجهاز على الشبكة نفسها.",
+      "retry": "إعادة المحاولة",
+      "connecting": "جارٍ الاتصال عبر {host}…",
+      "connectingUnnamed": "جارٍ الاتصال عبر المضيف البعيد…"
     },
     "download": {
       "started": "جارٍ التنزيل…",
@@ -6333,6 +6445,7 @@
       "shareControl": "قراءة وتنفيذ إجراءات",
       "levelDefault": "افتراضي",
       "notShareable": "لا يوجد عنوان ويب في هذه الصفحة لمشاركته مع الوكلاء",
+      "remoteWindow": "يعمل وكلاء مساحة العمل البعيدة على مضيفها ولا يمكنهم استخدام متصفح هذا الجهاز",
       "shared": "تمت المشاركة",
       "sharedControl": "مشاركة · يمكنه التصرف",
       "sharedWith": "يمكن للوكلاء قراءة {origin}",
@@ -6426,6 +6539,7 @@
       "noConversation": "افتح محادثة لإرسال هذه الصفحة إليها",
       "pickElement": "اختر عنصرًا…",
       "screenshot": "أرسل لقطة شاشة",
+      "markUp": "علّم على لقطة شاشة…",
       "consoleErrors": "أرسل أخطاء وحدة التحكم",
       "consoleClean": "لم يحدث خطأ في هذه الصفحة",
       "picking": "جارٍ الاختيار…",
@@ -6436,9 +6550,20 @@
       "noConsoleErrors": "لم تطبع هذه الصفحة أي أخطاء",
       "chipElement": "عنصر من الصفحة",
       "chipScreenshot": "لقطة من الصفحة",
+      "chipMarkedScreenshot": "لقطة شاشة عليها علامات",
       "chipConsole": "{count, plural, zero {لا أخطاء في وحدة التحكم} one {خطأ واحد في وحدة التحكم} two {خطآن في وحدة التحكم} few {# أخطاء في وحدة التحكم} many {# خطأ في وحدة التحكم} other {# خطأ في وحدة التحكم}}",
       "gone": "تلك المحادثة لم تعد مفتوحة",
-      "consoleErrorsCount": "{count, plural, zero {لا أخطاء لإرسالها} one {أرسل خطأ وحدة التحكم} two {أرسل خطأي وحدة التحكم} few {أرسل # أخطاء في وحدة التحكم} many {أرسل # خطأ في وحدة التحكم} other {أرسل # خطأ في وحدة التحكم}}"
+      "consoleErrorsCount": "{count, plural, zero {لا أخطاء لإرسالها} one {أرسل خطأ وحدة التحكم} two {أرسل خطأي وحدة التحكم} few {أرسل # أخطاء في وحدة التحكم} many {أرسل # خطأ في وحدة التحكم} other {أرسل # خطأ في وحدة التحكم}}",
+      "markupTitle": "التعليم على لقطة الشاشة",
+      "markupTools": "أداة الرسم",
+      "markupBox": "مربع",
+      "markupArrow": "سهم",
+      "markupUndo": "تراجع",
+      "markupClear": "مسح",
+      "markupHint": "اسحب على الصورة لترسم. تحمل كل علامة رقمًا يمكن لرسالتك أن تشير إليه.",
+      "markupCount": "{count, plural, zero {لا علامات} one {علامة واحدة} two {علامتان} few {# علامات} many {# علامة} other {# علامة}}",
+      "markupCancel": "إلغاء",
+      "markupSend": "أضف إلى المحادثة"
     }
   },
   "browser": {
@@ -6450,6 +6575,16 @@
     "inspector": {
       "error": {
         "switchedOff": "فُتحت هذه العلامة ومفتّش الويب مُعطّل. فعّله من إعدادات المتصفح ثم افتح الصفحة من جديد."
+      }
+    },
+    "remote": {
+      "error": {
+        "unavailable": "يتطلب فتح عناوين المضيف البعيد في المتصفح المدمج نظام macOS 14 أو أحدث.",
+        "unsupported": "خادم codeg-server البعيد قديم جدًا ولا يمكنه نقل حركة المتصفح. حدّثه لفتح عناوينه هنا.",
+        "disabled": "نفق المتصفح معطّل على خادم codeg-server البعيد (CODEG_BROWSER_TUNNEL).",
+        "unreachable": "تعذّر الوصول إلى نفق المتصفح في خادم codeg-server البعيد ({reason}).",
+        "bypassed": "يرسل محرك المتصفح في هذا الكمبيوتر بعض العناوين خارج النفق، لذا تبقى صفحات المضيف البعيد مغلقة بدل تحميلها من هذا الكمبيوتر.",
+        "probeFailed": "تعذّر على المتصفح المدمج التأكد من أنه يصل إلى المضيف البعيد عبر النفق. حاول مرة أخرى بعد قليل."
       }
     }
   }

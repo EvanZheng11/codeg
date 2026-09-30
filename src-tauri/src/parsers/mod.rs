@@ -13,6 +13,7 @@ pub mod hermes;
 pub mod kimi_code;
 pub mod openclaw;
 pub mod opencode;
+mod opencode_context_window;
 pub mod pi;
 pub mod qoder;
 mod summary_cache;
@@ -677,6 +678,38 @@ pub fn title_from_user_text(text: &str) -> String {
     truncate_str(&fold_reference_links(text), 100)
 }
 
+/// Widen one projected prompt block into a rendered turn's block type.
+///
+/// The projection itself is [`crate::acp::types::project_user_prompt_block`] —
+/// the SINGLE rule shared with the live broadcast. This only carries the result
+/// across into `models::message`, keeping the image `uri` that the live wire
+/// type has nowhere to put but the frontend uses for an image's display name.
+pub fn user_turn_block(block: &crate::acp::types::PromptInputBlock) -> ContentBlock {
+    match crate::acp::types::project_user_prompt_block(block) {
+        crate::acp::types::UserTurnBlock::Text { text } => ContentBlock::Text { text },
+        crate::acp::types::UserTurnBlock::Image {
+            data,
+            mime_type,
+            uri,
+        } => ContentBlock::Image {
+            data,
+            mime_type,
+            uri,
+        },
+    }
+}
+
+/// Read one recorded ACP content block off disk and project it the way the
+/// live path projects the same prompt. `None` when the block has nothing to
+/// render — see [`crate::acp::types::prompt_block_from_wire`].
+///
+/// Every history parser that reconstructs a user turn from raw ACP content
+/// goes through here, so "how an attachment appears in a user message" is
+/// decided once rather than per agent.
+pub fn user_turn_block_from_wire(item: &serde_json::Value) -> Option<ContentBlock> {
+    crate::acp::types::prompt_block_from_wire(item).map(|b| user_turn_block(&b))
+}
+
 /// Fill in `duration_ms` for assistant turns whose agent reports no timing of
 /// its own, by *tiling* the conversation timeline: a reply took as long as the
 /// span between the end of the previous activity and its own completion.
@@ -973,7 +1006,8 @@ pub fn latest_turn_total_usage_tokens(turns: &[MessageTurn]) -> Option<u64> {
 /// Deliberately NOT [`latest_turn_total_usage_tokens`], which adds
 /// `output_tokens` too: for this counter shape the reply is not resident in the
 /// prompt window that produced it, so including it over-reports the gauge by
-/// the last turn's output. Claude Code and Qoder both write this shape.
+/// the last turn's output. Claude Code, Qoder and OpenCode all write this
+/// shape (OpenCode's `tokens.input` already has the cached part taken out).
 pub fn latest_turn_prompt_usage_tokens(turns: &[MessageTurn]) -> Option<u64> {
     turns.iter().rev().find_map(|turn| {
         turn.usage.as_ref().and_then(|usage| {
@@ -1054,6 +1088,46 @@ pub fn with_reported_context_percent(
             context_window_usage_percent: Some(percent),
         }),
     }
+}
+
+/// `_meta` key claiming that a context-compaction call's result IS the summary
+/// the agent kept of the history it dropped.
+///
+/// The live reader stamps it on every call it translates from the ACP
+/// compaction lifecycle (`acp::connection::session_compaction_event`); a history
+/// parser stamps it through [`attach_compaction_summary`] on a divider whose
+/// summary its transcript still holds. Codeg-namespaced (like
+/// `codeg.delegation`) rather than nested in `contextCompaction`, whose members
+/// are the adapters' reserved vocabulary. The frontend twin is
+/// `COMPACTION_SUMMARY_META_KEY` in `src/lib/context-compaction.ts`, which shows
+/// a compaction call's output as its summary only under this claim.
+pub(crate) const COMPACTION_SUMMARY_META_KEY: &str = "codeg.compactionSummary";
+
+/// Hand a synthesized compaction divider — the `_meta.contextCompaction`
+/// ToolUse and its paired ToolResult that every parser emits for a compaction —
+/// the summary its agent retained, so the reopened divider opens onto the same
+/// "Summary" the live one does: the result carries the text, the call carries
+/// the claim.
+///
+/// Returns `false`, touching nothing, unless `blocks` is such a pair still
+/// waiting for its summary; a divider takes exactly one.
+pub(crate) fn attach_compaction_summary(blocks: &mut [ContentBlock], summary: String) -> bool {
+    let [ContentBlock::ToolUse {
+        meta: Some(serde_json::Value::Object(meta)),
+        ..
+    }, ContentBlock::ToolResult { output_preview, .. }] = blocks
+    else {
+        return false;
+    };
+    if !meta.contains_key("contextCompaction") || output_preview.is_some() {
+        return false;
+    }
+    meta.insert(
+        COMPACTION_SUMMARY_META_KEY.to_string(),
+        serde_json::Value::Bool(true),
+    );
+    *output_preview = Some(summary);
+    true
 }
 
 /// Relocate orphaned tool_result blocks to the turn that contains their matching tool_use.
