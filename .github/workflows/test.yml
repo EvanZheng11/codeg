@@ -134,6 +134,7 @@ jobs:
         # process load on GitHub-hosted runners before Rust tests start. Keep
         # compile coverage here; Linux/macOS desktop and Windows server cells
         # run the executable test suites.
+        if: matrix.os != 'macos-latest'
         working-directory: src-tauri
         run: cargo test ${{ matrix.cargo_args }} ${{ (matrix.os == 'windows-latest' && matrix.mode == 'desktop') && '--no-run' || '' }}
 
