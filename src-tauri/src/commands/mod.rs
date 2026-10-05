@@ -23,6 +23,8 @@ pub mod computer;
 /// the shared codeg-mcp plumbing reads them.
 pub mod computer_tools;
 pub mod config_sync;
+/// "New folder" in the directory browser (both runtimes).
+pub mod create_directory;
 pub mod conversations;
 pub mod custom_agents;
 pub mod custom_skills;
