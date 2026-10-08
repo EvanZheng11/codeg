@@ -2818,20 +2818,59 @@ mod tests {
         server.abort();
     }
 
-    /// The connection is edited to a new address while its socket is down,
-    /// then deleted: the retry dials the edited address, and the deletion
-    /// ends the loop without claiming the token expired.
+    /// The connection is edited to a new address, token and headers while its
+    /// socket is down, then deleted: the retry dials the edited connection,
+    /// and the deletion ends the loop without claiming the token expired.
     #[tokio::test]
     async fn ws_loop_retries_follow_the_stored_connection_until_it_is_deleted() {
-        /// Accept one socket and say ready; refuse every later dial; close the
-        /// socket when told to.
+        /// Accept one socket and say ready, as a server that refuses with 401
+        /// any dial not carrying `token` and `x-codeg-target: {target}`; refuse
+        /// every later dial; close the socket when told to.
+        // tungstenite fixes the handshake callback's error type to an HTTP response.
+        #[allow(clippy::result_large_err)]
         async fn serve_once(
             listener: tokio::net::TcpListener,
+            token: &'static str,
+            target: &'static str,
             close: tokio::sync::oneshot::Receiver<()>,
         ) {
             let (stream, _) = listener.accept().await.unwrap();
             drop(listener);
-            let mut socket = accept_test_socket(stream).await;
+            let offered = format!(
+                "{WS_TOKEN_PROTOCOL_PREFIX}{}",
+                URL_SAFE_NO_PAD.encode(token)
+            );
+            let accepted = tokio_tungstenite::accept_hdr_async(
+                stream,
+                move |request: &Request,
+                      mut response: tokio_tungstenite::tungstenite::handshake::server::Response| {
+                    let header = |name: &str| {
+                        request
+                            .headers()
+                            .get(name)
+                            .and_then(|value| value.to_str().ok())
+                            .unwrap_or_default()
+                            .to_owned()
+                    };
+                    if !header("sec-websocket-protocol").contains(&offered)
+                        || header("x-codeg-target") != target
+                    {
+                        return Err(tokio_tungstenite::tungstenite::http::Response::builder()
+                            .status(401)
+                            .body(None)
+                            .unwrap());
+                    }
+                    response.headers_mut().insert(
+                        "sec-websocket-protocol",
+                        HeaderValue::from_static(WS_EVENT_PROTOCOL),
+                    );
+                    Ok(response)
+                },
+            )
+            .await;
+            let Ok(mut socket) = accepted else {
+                return;
+            };
             socket
                 .send(Message::Text(
                     lifecycle_frame(WS_READY_CHANNEL).to_string().into(),
@@ -2842,22 +2881,38 @@ mod tests {
             socket.close(None).await.unwrap();
         }
 
+        fn stored_target(url: String, token: &str, target: &'static str) -> WsTarget {
+            let mut headers = HeaderMap::new();
+            headers.insert("x-codeg-target", HeaderValue::from_static(target));
+            WsTarget {
+                url,
+                token: token.into(),
+                headers,
+            }
+        }
+
         let old = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let new = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let old_url = format!("ws://{}/ws/events", old.local_addr().unwrap());
         let new_url = format!("ws://{}/ws/events", new.local_addr().unwrap());
         let (close_old, close_old_rx) = tokio::sync::oneshot::channel();
         let (close_new, close_new_rx) = tokio::sync::oneshot::channel();
-        let old_server = tokio::spawn(serve_once(old, close_old_rx));
-        let new_server = tokio::spawn(serve_once(new, close_new_rx));
+        let old_server = tokio::spawn(serve_once(old, "old-token", "old", close_old_rx));
+        let new_server = tokio::spawn(serve_once(new, "new-token", "new", close_new_rx));
 
-        // What the database holds: the loop was spawned on the old address,
-        // and the user has since pointed the connection at the new one.
-        let stored = Arc::new(std::sync::Mutex::new(Some(test_ws_target(new_url))));
+        // What the database holds: the loop was spawned on the old connection,
+        // and the user has since pointed it at a new address with a new token
+        // and headers. A retry carrying any old credential gets a 401.
+        let stored = Arc::new(std::sync::Mutex::new(Some(stored_target(
+            new_url,
+            "new-token",
+            "new",
+        ))));
         let lookup = stored.clone();
-        let mut client = start_test_socket_loop_with(test_ws_target(old_url), move |_| {
-            std::future::ready(lookup.lock().unwrap().clone())
-        });
+        let mut client =
+            start_test_socket_loop_with(stored_target(old_url, "old-token", "old"), move |_| {
+                std::future::ready(lookup.lock().unwrap().clone())
+            });
         assert_eq!(
             next_test_frame(&mut client.frames).await["channel"],
             WS_READY_CHANNEL
