@@ -892,7 +892,7 @@ pub async fn open_import_sessions_window(
 /// (macOS returns early; Windows first syncs the flag from `IsIconic`, so the
 /// diff it applies is empty), and `show` preserves the maximized flag — a
 /// tray-hidden maximized workspace comes back maximized.
-fn show_and_focus_window(app: &AppHandle, label: &str) {
+pub(crate) fn show_and_focus_window(app: &AppHandle, label: &str) {
     let Some(window) = app.get_webview_window(label) else {
         return;
     };
@@ -2339,9 +2339,8 @@ fn wait_for_macos_fullscreen_space_release(window: &tauri::WebviewWindow) {
 
 /// Bring the hidden / minimized main workspace window back to the
 /// foreground. Used by:
-///   * single-instance plugin (second launch)
 ///   * tray icon left-click and "Show Workspace" menu item
-///   * macOS dock-icon reopen
+///   * explicit local-workspace and deep-link actions
 #[cfg(feature = "tauri-runtime")]
 pub fn show_main_window(app: &AppHandle) {
     show_and_focus_window(app, "main");
