@@ -38,6 +38,7 @@ use base64::{
     Engine as _,
 };
 use futures_util::{SinkExt, Stream, StreamExt};
+use sea_orm::DatabaseConnection;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter, EventTarget, State, WebviewWindow};
 use tokio::sync::{mpsc, watch, Mutex, RwLock};
@@ -66,7 +67,7 @@ use crate::app_error::{
 };
 use crate::db::service::remote_workspace_connection_service;
 use crate::db::AppDatabase;
-use crate::models::ToHeaderMap;
+use crate::models::{RemoteWorkspaceConnectionInfo, ToHeaderMap};
 use crate::workspace_transfer::{
     TransferDirection, TransferState, WorkspaceTransferManager, WorkspaceTransferProgress,
     WORKSPACE_TRANSFER_PROGRESS_EVENT,
@@ -1630,19 +1631,17 @@ pub async fn remote_ws_subscribe(
 
     let task_app = app.clone();
     let task_proxy = proxy_arc.clone();
-    let base_url = conn.base_url.clone();
-    let token = conn.token.clone();
-    let custom_headers = conn.headers.to_header_map();
+    let task_db = db.conn.clone();
+    let target = WsTarget::of(&conn);
     let task_entry = entry.clone();
 
     tauri::async_runtime::spawn(async move {
         run_ws_task(
             task_app,
             task_proxy,
+            task_db,
             connection_id,
-            base_url,
-            token,
-            custom_headers,
+            target,
             task_entry,
             shutdown_rx,
             outbound_rx,
@@ -1736,14 +1735,16 @@ pub async fn remote_ws_unsubscribe(
 ///   2. Forward the server's `__ready__` once its receiver is subscribed.
 ///   3. Forward legacy envelopes and attach-protocol snapshot/replay/events.
 ///   4. On network failure, emit `__disconnected__` and keep retrying with
-///      capped backoff. Only an HTTP 401 emits `__unauthorized__` and exits.
+///      capped backoff, each retry dialing the connection as it is stored
+///      then. Only an HTTP 401 emits `__unauthorized__` and exits; so does a
+///      deleted connection, quietly.
 ///   5. Heartbeats recover half-open sockets after sleep or lost packets.
 ///   6. Shutdown cancels both connection attempts and backoff.
 ///
 /// On exit (any path), the task removes its entry from `proxy.tasks` —
 /// but only if the entry still matches its own `Arc`, so a racy
 /// resubscribe that already replaced the entry isn't clobbered.
-// `app`/`proxy`/`connection_id`/`base_url`/`token`/`entry`/`shutdown_rx`/
+// `app`/`proxy`/`db`/`connection_id`/`target`/`entry`/`shutdown_rx`/
 // `outbound_rx` are all distinct concerns the task needs; bundling into a
 // single struct would just spread the field definitions to a different
 // place without improving readability.
@@ -1751,20 +1752,17 @@ pub async fn remote_ws_unsubscribe(
 async fn run_ws_task(
     app: AppHandle,
     proxy: Arc<RemoteProxyState>,
+    db: DatabaseConnection,
     connection_id: i32,
-    base_url: String,
-    token: String,
-    custom_headers: HeaderMap,
+    target: WsTarget,
     entry: Arc<WsTaskEntry>,
     mut shutdown_rx: watch::Receiver<bool>,
     mut outbound_rx: mpsc::Receiver<String>,
 ) {
     let event_name = format!("remote-ws-event-{connection_id}");
-    let ws_url = http_url_to_ws_url(&base_url, WS_EVENTS_PATH);
     run_ws_connection(
-        &ws_url,
-        &token,
-        &custom_headers,
+        target,
+        |last_known| stored_ws_target(db.clone(), connection_id, last_known),
         &entry,
         &mut shutdown_rx,
         &mut outbound_rx,
@@ -1784,17 +1782,65 @@ async fn run_ws_task(
     }
 }
 
+/// Where the event WebSocket connects, and the credentials it presents.
+#[derive(Clone)]
+struct WsTarget {
+    url: String,
+    token: String,
+    headers: HeaderMap,
+}
+
+impl WsTarget {
+    fn of(connection: &RemoteWorkspaceConnectionInfo) -> Self {
+        Self {
+            url: http_url_to_ws_url(&connection.base_url, WS_EVENTS_PATH),
+            token: connection.token.clone(),
+            headers: connection.headers.to_header_map(),
+        }
+    }
+}
+
+/// The target a retry dials: the connection as stored now. HTTP calls read
+/// the connection per request, so an edited address or token reaches them at
+/// once; without this, a socket retrying an address that has since been
+/// edited away would retry it until its window closed. `None` once the
+/// connection has been deleted. A failed lookup keeps `last_known`.
+async fn stored_ws_target(
+    db: DatabaseConnection,
+    connection_id: i32,
+    last_known: WsTarget,
+) -> Option<WsTarget> {
+    match remote_workspace_connection_service::get(&db, connection_id).await {
+        Ok(Some(connection)) => Some(WsTarget::of(&connection)),
+        Ok(None) => {
+            tracing::info!(
+                "[RemoteProxy] remote connection {connection_id} was deleted; its event socket stops"
+            );
+            None
+        }
+        Err(err) => {
+            tracing::warn!(
+                "[RemoteProxy] could not reload remote connection {connection_id}, retrying its last address: {err}"
+            );
+            Some(last_known)
+        }
+    }
+}
+
 /// Network lifecycle separated from Tauri delivery so tests exercise actual
 /// sockets, failures and recovery without constructing native webviews.
-async fn run_ws_connection<F, Fut>(
-    ws_url: &str,
-    token: &str,
-    custom_headers: &HeaderMap,
+/// `target` is dialed first; every retry dials what `refresh_target` returns
+/// for the target before it, and the loop ends when it returns `None`.
+async fn run_ws_connection<R, RFut, F, Fut>(
+    mut target: WsTarget,
+    mut refresh_target: R,
     entry: &WsTaskEntry,
     shutdown_rx: &mut watch::Receiver<bool>,
     outbound_rx: &mut mpsc::Receiver<String>,
     mut emit: F,
 ) where
+    R: FnMut(WsTarget) -> RFut,
+    RFut: Future<Output = Option<WsTarget>>,
     F: FnMut(Value) -> Fut,
     Fut: Future<Output = ()>,
 {
@@ -1803,6 +1849,15 @@ async fn run_ws_connection<F, Fut>(
     'reconnect: loop {
         if *shutdown_rx.borrow() {
             break;
+        }
+        // A retry (any attempt after a failure or a lost socket) dials the
+        // connection as it is stored now; the first attempt uses what the
+        // subscribe has just read.
+        if fail_count > 0 {
+            match refresh_target(target.clone()).await {
+                Some(current) => target = current,
+                None => break,
+            }
         }
 
         let connect_result = tokio::select! {
@@ -1813,7 +1868,7 @@ async fn run_ws_connection<F, Fut>(
                 }
                 continue;
             }
-            res = connect_with_subprotocol_auth(ws_url, WS_EVENT_PROTOCOL, token, custom_headers) => res,
+            res = connect_with_subprotocol_auth(&target.url, WS_EVENT_PROTOCOL, &target.token, &target.headers) => res,
         };
 
         let mut socket = match connect_result {
@@ -2546,16 +2601,32 @@ mod tests {
         outbound: mpsc::Sender<String>,
     }
 
+    fn test_ws_target(url: String) -> WsTarget {
+        WsTarget {
+            url,
+            token: "private-token-sentinel".into(),
+            headers: HeaderMap::new(),
+        }
+    }
+
+    /// A loop whose connection is never edited: every retry dials `url`.
     fn start_test_socket_loop(url: String) -> TestSocketLoop {
+        start_test_socket_loop_with(test_ws_target(url), |last| std::future::ready(Some(last)))
+    }
+
+    fn start_test_socket_loop_with<R, RFut>(target: WsTarget, refresh_target: R) -> TestSocketLoop
+    where
+        R: FnMut(WsTarget) -> RFut + Send + 'static,
+        RFut: Future<Output = Option<WsTarget>> + Send,
+    {
         let (entry, mut outbound_rx) = entry_with_outbound(8);
         let outbound = entry.outbound_tx.clone();
         let (shutdown, mut shutdown_rx) = watch::channel(false);
         let (tx, frames) = mpsc::unbounded_channel();
         let task = tokio::spawn(async move {
             run_ws_connection(
-                &url,
-                "private-token-sentinel",
-                &HeaderMap::new(),
+                target,
+                refresh_target,
                 &entry,
                 &mut shutdown_rx,
                 &mut outbound_rx,
@@ -2745,6 +2816,124 @@ mod tests {
         client.shutdown.send(true).unwrap();
         client.task.await.unwrap();
         server.abort();
+    }
+
+    /// The connection is edited to a new address while its socket is down,
+    /// then deleted: the retry dials the edited address, and the deletion
+    /// ends the loop without claiming the token expired.
+    #[tokio::test]
+    async fn ws_loop_retries_follow_the_stored_connection_until_it_is_deleted() {
+        /// Accept one socket and say ready; refuse every later dial; close the
+        /// socket when told to.
+        async fn serve_once(
+            listener: tokio::net::TcpListener,
+            close: tokio::sync::oneshot::Receiver<()>,
+        ) {
+            let (stream, _) = listener.accept().await.unwrap();
+            drop(listener);
+            let mut socket = accept_test_socket(stream).await;
+            socket
+                .send(Message::Text(
+                    lifecycle_frame(WS_READY_CHANNEL).to_string().into(),
+                ))
+                .await
+                .unwrap();
+            let _ = close.await;
+            socket.close(None).await.unwrap();
+        }
+
+        let old = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let new = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let old_url = format!("ws://{}/ws/events", old.local_addr().unwrap());
+        let new_url = format!("ws://{}/ws/events", new.local_addr().unwrap());
+        let (close_old, close_old_rx) = tokio::sync::oneshot::channel();
+        let (close_new, close_new_rx) = tokio::sync::oneshot::channel();
+        let old_server = tokio::spawn(serve_once(old, close_old_rx));
+        let new_server = tokio::spawn(serve_once(new, close_new_rx));
+
+        // What the database holds: the loop was spawned on the old address,
+        // and the user has since pointed the connection at the new one.
+        let stored = Arc::new(std::sync::Mutex::new(Some(test_ws_target(new_url))));
+        let lookup = stored.clone();
+        let mut client = start_test_socket_loop_with(test_ws_target(old_url), move |_| {
+            std::future::ready(lookup.lock().unwrap().clone())
+        });
+        assert_eq!(
+            next_test_frame(&mut client.frames).await["channel"],
+            WS_READY_CHANNEL
+        );
+        close_old.send(()).unwrap();
+        assert_eq!(
+            next_test_frame(&mut client.frames).await["channel"],
+            WS_DISCONNECTED_CHANNEL
+        );
+        // The old address now refuses, so only the edited one can say ready.
+        assert_eq!(
+            next_test_frame(&mut client.frames).await["channel"],
+            WS_READY_CHANNEL
+        );
+
+        *stored.lock().unwrap() = None;
+        close_new.send(()).unwrap();
+        assert_eq!(
+            next_test_frame(&mut client.frames).await["channel"],
+            WS_DISCONNECTED_CHANNEL
+        );
+        tokio::time::timeout(Duration::from_secs(30), client.task)
+            .await
+            .expect("a deleted connection ends the loop")
+            .unwrap();
+        // Nothing after that disconnect, in particular no `__unauthorized__`.
+        assert!(client.frames.recv().await.is_none());
+        old_server.await.unwrap();
+        new_server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_retry_target_is_the_connection_as_stored_now() {
+        let db = crate::db::test_helpers::fresh_in_memory_db().await;
+        let created = remote_workspace_connection_service::create(
+            &db.conn,
+            "box",
+            "http://old.example:3080",
+            "old-token",
+            &[],
+        )
+        .await
+        .unwrap();
+        let initial = WsTarget::of(&created);
+        assert_eq!(initial.url, "ws://old.example:3080/ws/events");
+
+        remote_workspace_connection_service::update(
+            &db.conn,
+            created.id,
+            "box",
+            "https://new.example",
+            "new-token",
+            &[],
+        )
+        .await
+        .unwrap();
+        let current = stored_ws_target(db.conn.clone(), created.id, initial.clone())
+            .await
+            .expect("a stored connection has a target");
+        assert_eq!(current.url, "wss://new.example/ws/events");
+        assert_eq!(current.token, "new-token");
+
+        // A lookup that fails keeps dialing the last address it found.
+        let closed = crate::db::test_helpers::fresh_in_memory_db().await;
+        closed.conn.close_by_ref().await.unwrap();
+        let kept = stored_ws_target(closed.conn.clone(), created.id, current.clone())
+            .await
+            .expect("a failed lookup keeps the last target");
+        assert_eq!(kept.url, current.url);
+
+        remote_workspace_connection_service::delete(&db.conn, created.id)
+            .await
+            .unwrap();
+        assert!(stored_ws_target(db.conn.clone(), created.id, current)
+            .await
+            .is_none());
     }
 
     // ─── i18n key wire-format tripwire ─────────────────────────────────
