@@ -11,6 +11,7 @@ import {
   useState,
   type ComponentProps,
 } from "react"
+import { flushSync } from "react-dom"
 import { useControllableState } from "@radix-ui/react-use-controllable-state"
 
 // Drop-in replacement for ui/collapsible (Radix) used on the message hot
@@ -161,11 +162,20 @@ function CollapsibleContent({ children, ...props }: ComponentProps<"div">) {
       setPresent(false)
       return
     }
+    // tw-animate-css's `animate-out` runs with `animation-fill-mode: none`, so
+    // the moment the exit finishes the content snaps back to its resting
+    // style (opacity 1, no slide) — and a plain setPresent lands in a later
+    // task, after that frame paints. That one fully visible frame is the flash
+    // on every collapse. Hold the exit's last keyframe until removal, and
+    // remove synchronously in the animationend handler, which runs before
+    // the frame paints (the same pair Radix Presence uses).
+    const prevFillMode = node.style.animationFillMode
+    node.style.animationFillMode = "forwards"
     let done = false
     const finish = () => {
       if (done) return
       done = true
-      setPresent(false)
+      flushSync(() => setPresent(false))
     }
     const onAnimationDone = (event: AnimationEvent) => {
       // Child animations bubble; only the content's own exit counts.
@@ -178,6 +188,9 @@ function CollapsibleContent({ children, ...props }: ComponentProps<"div">) {
       node.removeEventListener("animationend", onAnimationDone)
       node.removeEventListener("animationcancel", onAnimationDone)
       window.clearTimeout(timeout)
+      // Reopened mid-exit: the node stays mounted, so hand back its own
+      // fill mode for the enter animation.
+      node.style.animationFillMode = prevFillMode
     }
   }, [open])
 
