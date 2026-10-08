@@ -38,10 +38,11 @@ pub struct RemoteWorkspaceConnectionInput {
     pub headers: Vec<RemoteWorkspaceHeader>,
 }
 
-/// The same check a remote workspace window has to pass before it opens, for
-/// every caller that opens one: the "Open remote workspace" menus, and the
-/// launch reopening the windows that were open at the last quit
-/// (`workspace_windows`).
+/// The check a connection has to pass before it is saved or tested, and before
+/// the "Open remote workspace" menus open its window. The launch reopening the
+/// windows that were open at the last quit (`workspace_windows`) skips it on
+/// purpose: a server that is offline at launch comes back through the window's
+/// own transport instead of costing the window its place in the session.
 #[cfg(feature = "tauri-runtime")]
 pub(crate) async fn validate_remote_health(
     base_url: &str,

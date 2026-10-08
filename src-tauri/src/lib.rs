@@ -1564,8 +1564,9 @@ mod tauri_app {
                         //     aux windows in a process with no workspace and
                         //     no way to bring it back — `pet` runs with
                         //     `skip_taskbar(true)`, and the single-instance
-                        //     callback's `show_main_window` is a no-op once
-                        //     main is destroyed. So the choice folds to Exit,
+                        //     callback's activation can only raise windows
+                        //     that still exist; nothing rebuilds a destroyed
+                        //     main. So the choice folds to Exit,
                         //     rather than exiting right here: folding keeps
                         //     the running-terminal confirmation below on the
                         //     path for this platform too.
