@@ -198,7 +198,10 @@ export const DirectoryBrowser = forwardRef<
     busyRef.current = onBusyChange
   }, [onBusyChange])
   // A folder being created counts as busy too: confirming meanwhile would
-  // commit the directory it is being created in, not the new one.
+  // commit the directory it is being created in, not the new one. The browser
+  // also holds still until the request settles (Home, Up, the path box's
+  // Enter, the row's Escape and X): moving would close the row, clear this
+  // flag, and leave the late answer to override wherever the user went.
   const creatingFolder = newFolder?.busy ?? false
   useEffect(() => {
     busyRef.current?.(confirming || creatingFolder)
@@ -410,11 +413,11 @@ export const DirectoryBrowser = forwardRef<
   const handlePathInputKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (ime.isComposing(e)) return
-      if (e.key === "Enter" && value.trim()) {
+      if (e.key === "Enter" && value.trim() && !creatingFolder) {
         navigateTo(value.trim())
       }
     },
-    [ime, value, navigateTo]
+    [ime, value, navigateTo, creatingFolder]
   )
 
   const selectedSet = new Set((selectedPaths ?? []).map(normalizeFsPath))
@@ -530,11 +533,17 @@ export const DirectoryBrowser = forwardRef<
       <TooltipProvider delayDuration={200}>
         <InputGroup className="h-8">
           <InputGroupAddon align="inline-start" className="gap-0.5 py-0">
-            <NavButton icon={Home} label={t("goHome")} onClick={handleGoHome} />
+            <NavButton
+              icon={Home}
+              label={t("goHome")}
+              onClick={handleGoHome}
+              disabled={creatingFolder}
+            />
             <NavButton
               icon={UndoDot}
               label={t("navigateUp")}
               onClick={handleNavigateUp}
+              disabled={creatingFolder}
             />
             {allowCreateFolder ? (
               <NavButton

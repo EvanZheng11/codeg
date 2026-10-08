@@ -393,6 +393,50 @@ describe("DirectoryBrowser — new folder", () => {
     ).not.toBeInTheDocument()
   })
 
+  it("holds navigation while the folder is being created", async () => {
+    listing.set("/home", [dir("me", "/home/me", true)])
+    let finish: (path: string) => void = () => {}
+    api.createDirectory.mockImplementation(
+      () =>
+        new Promise<string>((resolve) => {
+          finish = resolve
+        })
+    )
+    render(<Harness />)
+    const input = await openNewFolderRow()
+    fireEvent.change(input, { target: { value: "slow" } })
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter" })
+    })
+
+    // Moving now would close the row and clear the busy flag, and the late
+    // answer would then override wherever the user went.
+    expect(
+      screen.getByRole("button", { name: "Go to parent directory" })
+    ).toBeDisabled()
+    expect(
+      screen.getByRole("button", { name: "Go to home directory" })
+    ).toBeDisabled()
+    const pathBox = screen.getByDisplayValue("/home/me")
+    fireEvent.change(pathBox, { target: { value: "/home" } })
+    await act(async () => {
+      fireEvent.keyDown(pathBox, { key: "Enter" })
+    })
+    expect(api.listDirectoryEntries).not.toHaveBeenCalledWith("/home")
+    expect(
+      screen.getByRole("textbox", { name: "Folder name" })
+    ).toBeInTheDocument()
+
+    listing.set("/home/me/slow", [])
+    await act(async () => {
+      finish("/home/me/slow")
+    })
+    await screen.findByDisplayValue("/home/me/slow")
+    expect(
+      screen.getByRole("button", { name: "Go to parent directory" })
+    ).toBeEnabled()
+  })
+
   it("speaks the locale, right-to-left included", async () => {
     api.createDirectory.mockRejectedValue(
       appError("already_exists", "newFolder.errors.alreadyExists", {
