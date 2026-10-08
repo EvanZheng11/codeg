@@ -4745,6 +4745,8 @@
     }
   },
   "RemoteWorkspace": {
+    "openLocalWorkspace": "Lokalen Arbeitsbereich öffnen",
+    "openLocalFailed": "Lokaler Arbeitsbereich konnte nicht geöffnet werden",
     "openRemoteWorkspace": "Open remote workspace",
     "manage": "Manage remote workspace",
     "manageTitle": "Remote Workspace connections",

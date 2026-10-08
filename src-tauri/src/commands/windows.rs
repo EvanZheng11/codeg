@@ -2348,6 +2348,12 @@ pub fn show_main_window(app: &AppHandle) {
 }
 
 #[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub fn open_local_workspace(app: AppHandle) {
+    show_main_window(&app);
+}
+
+#[cfg(feature = "tauri-runtime")]
 struct TrayLabels {
     show_workspace: &'static str,
     quit: &'static str,

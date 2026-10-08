@@ -9,6 +9,7 @@ import {
   LayoutTemplate,
   ListTodo,
   Map as MapIcon,
+  Monitor,
   MonitorCloud,
   PawPrint,
   Rocket,
@@ -39,6 +40,7 @@ import { toErrorMessage } from "@/lib/app-error"
 import { BLANK_PAGE_URL } from "@/lib/browser/browser-url"
 import { useBrowserCapabilities } from "@/lib/browser/use-browser-capabilities"
 import { openPetWindow } from "@/lib/pet/api"
+import { openLocalWorkspace } from "@/lib/remote-workspace"
 import { CloneDialog } from "./clone-dialog"
 import { RemoteWorkspaceManageDialog } from "./remote-workspace-manage-dialog"
 import { WorkspaceFolderDialog } from "./workspace-folder-dialog"
@@ -101,6 +103,14 @@ export function QuickActionsDropdown() {
       console.error("[QuickActionsDropdown] failed to open project boot:", err)
     })
   }, [])
+
+  const handleOpenLocal = useCallback(() => {
+    openLocalWorkspace().catch((err) => {
+      toast.error(tRemote("openLocalFailed"), {
+        description: toErrorMessage(err),
+      })
+    })
+  }, [tRemote])
 
   // The file column — where browser tabs live — only exists on the
   // conversations route; every other workbench route is rendered in its place.
@@ -166,6 +176,12 @@ export function QuickActionsDropdown() {
             <Rocket />
             {tFolderDropdown("projectBoot")}
           </DropdownMenuItem>
+          {desktop && (
+            <DropdownMenuItem onSelect={handleOpenLocal}>
+              <Monitor />
+              {tRemote("openLocalWorkspace")}
+            </DropdownMenuItem>
+          )}
           {desktop && (
             <DropdownMenuSub
               onOpenChange={(open) => open && void refreshRemote()}

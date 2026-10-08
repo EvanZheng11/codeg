@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => {
     connections,
     openProjectBootWindow: vi.fn(() => Promise.resolve()),
     openPetWindow: vi.fn(() => Promise.resolve()),
+    openLocalWorkspace: vi.fn(() => Promise.resolve()),
     openRemoteWorkspace: vi.fn(() => Promise.resolve()),
     listRemoteWorkspaceConnections: vi.fn(() => Promise.resolve(connections)),
     setRoute: vi.fn(),
@@ -38,6 +39,7 @@ vi.mock("@/lib/pet/api", () => ({ openPetWindow: mocks.openPetWindow }))
 
 vi.mock("@/lib/remote-workspace", () => ({
   listRemoteWorkspaceConnections: mocks.listRemoteWorkspaceConnections,
+  openLocalWorkspace: mocks.openLocalWorkspace,
   openRemoteWorkspace: mocks.openRemoteWorkspace,
 }))
 
@@ -117,7 +119,7 @@ beforeEach(() => {
 })
 
 describe("QuickActionsDropdown", () => {
-  it("groups all nine actions under their headings on desktop", async () => {
+  it("groups desktop actions under their headings", async () => {
     await mountAndOpen()
 
     for (const group of ["Workspace", "Navigation", "More"]) {
@@ -127,6 +129,7 @@ describe("QuickActionsDropdown", () => {
       "Open Folder",
       "Clone Repository",
       "Project Boot",
+      "Open local workspace",
       "Open remote workspace",
       AUTOMATIONS_ROW,
       "To-dos",
@@ -201,6 +204,9 @@ describe("QuickActionsDropdown", () => {
     expect(
       screen.queryByRole("menuitem", { name: "Open remote workspace" })
     ).toBeNull()
+    expect(
+      screen.queryByRole("menuitem", { name: "Open local workspace" })
+    ).toBeNull()
     expect(screen.queryByRole("menuitem", { name: "Show pet" })).toBeNull()
     expect(screen.queryByText("More")).toBeNull()
   })
@@ -208,6 +214,11 @@ describe("QuickActionsDropdown", () => {
   it("routes each action to its own entry point", async () => {
     await mountAndOpen()
 
+    await clickItem("Open local workspace")
+    expect(mocks.openLocalWorkspace).toHaveBeenCalledOnce()
+    expect(mocks.openRemoteWorkspace).not.toHaveBeenCalled()
+
+    await reopen()
     await clickItem(AUTOMATIONS_ROW)
     expect(mocks.setRoute).toHaveBeenCalledWith("automations")
 

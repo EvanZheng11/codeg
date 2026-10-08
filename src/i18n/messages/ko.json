@@ -4745,6 +4745,8 @@
     }
   },
   "RemoteWorkspace": {
+    "openLocalWorkspace": "로컬 워크스페이스 열기",
+    "openLocalFailed": "로컬 워크스페이스를 열지 못했습니다",
     "openRemoteWorkspace": "Open remote workspace",
     "manage": "Manage remote workspace",
     "manageTitle": "Remote Workspace connections",
