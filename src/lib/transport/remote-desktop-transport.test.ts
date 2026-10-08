@@ -157,6 +157,8 @@ describe("remote desktop event recovery", () => {
     await flush()
     drop()
     drop()
+    await flush()
+    expect(settled).not.toHaveBeenCalled()
     ready()
     await flush()
     expect(settled).toHaveBeenCalledTimes(1)
@@ -173,7 +175,11 @@ describe("remote desktop event recovery", () => {
     const settled = vi.fn()
     const subscription = t.subscribe("folders://changed", vi.fn()).then(settled)
     await flush()
+    // The socket is down, so the subscriber waits for the next ready.
+    expect(settled).not.toHaveBeenCalled()
     drop()
+    await flush()
+    expect(settled).not.toHaveBeenCalled()
     ready()
     await flush()
     expect(settled).toHaveBeenCalledTimes(1)
@@ -250,18 +256,22 @@ describe("remote desktop event recovery", () => {
 
   it("coalesces failed attach sends and cancels retry after destroy", async () => {
     const t = transport()
-    t.eventStream().attach("session-1", {}, handlers())
+    const stream = t.eventStream()
+    stream.attach("session-1", {}, handlers())
+    stream.attach("session-2", {}, handlers())
     await flush()
     ipc.invoke.mockImplementation(async (command) => {
       if (command === "remote_ws_send_text") throw { code: "network_error" }
     })
     ready()
     await flush()
-    await vi.advanceTimersByTimeAsync(200)
     expect(sentFrames()).toHaveLength(2)
+    // Both failures share one retry: a single reattach of both sessions.
+    await vi.advanceTimersByTimeAsync(200)
+    expect(sentFrames()).toHaveLength(4)
     t.destroy()
     await vi.advanceTimersByTimeAsync(1_000)
-    expect(sentFrames()).toHaveLength(2)
+    expect(sentFrames()).toHaveLength(4)
   })
 
   it("releases an IPC listener that arrives after its window was destroyed", async () => {
