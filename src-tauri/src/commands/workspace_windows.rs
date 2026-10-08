@@ -252,6 +252,9 @@ impl SessionState {
         let before = self.open.len() + self.pending.len();
         self.open.retain(|w| *w != window);
         self.pending.retain(|w| *w != window);
+        if self.restore_front == Some(window) {
+            self.restore_front = self.open.last().or_else(|| self.pending.last()).copied();
+        }
         if self.open.len() + self.pending.len() == before {
             Change::None
         } else {
@@ -1055,6 +1058,23 @@ mod tests {
         state.mark_open(remote(1)); // background build completes
         assert_eq!(state.activation_target(|_| true), Some(LOCAL));
         state.complete_restore();
+    }
+
+    #[test]
+    fn closing_local_during_restore_cancels_its_front_window_request() {
+        let mut state = SessionState {
+            pending: vec![remote(1)],
+            restoring: true,
+            restore_front: Some(remote(1)),
+            ..SessionState::default()
+        };
+        state.mark_shown(LOCAL);
+        state.mark_closed(LOCAL);
+        // `main` is still a native window, hidden to the tray. Its previous
+        // explicit-open request must not show it again at the end of restore.
+        assert_eq!(state.activation_target(|window| window == LOCAL), None);
+        state.mark_open(remote(1));
+        assert_eq!(state.activation_target(|_| true), Some(remote(1)));
     }
 
     #[test]

@@ -45,6 +45,11 @@ function sentFrames() {
     .map(([, args]) => JSON.parse(args.text))
 }
 
+function latestSentFrame() {
+  const frames = sentFrames()
+  return frames[frames.length - 1]
+}
+
 function handlers(): AttachHandlers {
   return {
     onSnapshot: vi.fn(),
@@ -99,7 +104,7 @@ describe("remote desktop event recovery", () => {
     await vi.advanceTimersByTimeAsync(60_000)
     expect(sentFrames()).toHaveLength(1)
     ready()
-    expect(sentFrames().at(-1)).toEqual({
+    expect(latestSentFrame()).toEqual({
       action: "attach",
       subscription_id: sub.subscriptionId,
       connection_id: "session-1",
@@ -122,7 +127,7 @@ describe("remote desktop event recovery", () => {
     // A later reconnect must start after the newly delivered conversation.
     drop()
     ready()
-    expect(sentFrames().at(-1).since_seq).toBe(12)
+    expect(latestSentFrame().since_seq).toBe(12)
     expect(resync).toHaveBeenCalledTimes(2)
   })
 
@@ -207,7 +212,7 @@ describe("remote desktop event recovery", () => {
     expect(h.onSnapshot).toHaveBeenCalledWith(snapshot, 2)
     drop()
     ready()
-    expect(sentFrames().at(-1).since_seq).toBe(2)
+    expect(latestSentFrame().since_seq).toBe(2)
   })
 
   it("does not resurrect detached conversations on reconnect", async () => {

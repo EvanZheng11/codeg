@@ -2581,6 +2581,8 @@ mod tests {
             .expect("proxy must stay alive")
     }
 
+    // tungstenite fixes the handshake callback's error type to an HTTP response.
+    #[allow(clippy::result_large_err)]
     async fn accept_test_socket(
         stream: tokio::net::TcpStream,
     ) -> tokio_tungstenite::WebSocketStream<tokio::net::TcpStream> {
@@ -2590,17 +2592,27 @@ mod tests {
         }).await.unwrap()
     }
 
+    async fn read_test_handshake(stream: &mut tokio::net::TcpStream) {
+        use tokio::io::AsyncReadExt;
+        let mut request = Vec::new();
+        while !request.ends_with(b"\r\n\r\n") {
+            let mut byte = [0];
+            stream.read_exact(&mut byte).await.unwrap();
+            request.push(byte[0]);
+            assert!(request.len() <= 8192, "test handshake must be bounded");
+        }
+    }
+
     #[tokio::test]
     async fn ws_loop_recovers_after_more_than_three_transient_failures() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::io::AsyncWriteExt;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
             for attempt in 0..5 {
                 let (mut stream, _) = listener.accept().await.unwrap();
                 if (1..=3).contains(&attempt) {
-                    let mut request = [0; 4096];
-                    stream.read(&mut request).await.unwrap();
+                    read_test_handshake(&mut stream).await;
                     stream
                         .write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n")
                         .await
@@ -2672,13 +2684,12 @@ mod tests {
 
     #[tokio::test]
     async fn ws_loop_stops_on_401_and_sanitizes_handshake_diagnostics() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio::io::AsyncWriteExt;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
-            let mut request = [0; 4096];
-            stream.read(&mut request).await.unwrap();
+            read_test_handshake(&mut stream).await;
             stream.write_all(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nX-Echo: private-token-sentinel\r\n\r\n").await.unwrap();
         });
         let mut client = start_test_socket_loop(format!("ws://{address}/ws/events"));
