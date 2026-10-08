@@ -406,7 +406,7 @@ async fn prewarm_uvx_agent(
 }
 
 pub(crate) async fn resolve_npx_command(cmd: &str) -> Option<PathBuf> {
-    if let Some(path) = resolve_command_on_path(cmd) {
+    if let Some(path) = resolve_system_agent_binary(cmd) {
         return Some(path);
     }
     resolve_npx_command_from_current_npm_prefix(cmd).await
@@ -424,7 +424,7 @@ impl NpxCommandResolver {
             return cached.clone();
         }
 
-        let resolved = if let Some(path) = resolve_command_on_path(cmd) {
+        let resolved = if let Some(path) = resolve_system_agent_binary(cmd) {
             Some(path)
         } else {
             let prefix = if let Some(prefix) = &self.request_npm_prefix {
@@ -1236,6 +1236,16 @@ fn compute_verdict(inp: &DiagInputs) -> DiagnosticsVerdict {
     }
 
     if agent.resolve_npx.is_none() {
+        if agent.db_version.is_none()
+            && agent.detected_version.is_none()
+            && inp.terminal.cmd_resolved.is_some()
+        {
+            return diag_verdict(
+                DiagLevel::Fail,
+                "terminal_only_path",
+                "The command resolves in your terminal but not in the app process — a GUI PATH gap.",
+            );
+        }
         // An ACP adapter agent that was never installed is the single most
         // reported "bug": the user has the vendor CLI and reads "not installed"
         // as codeg failing to see it. Answer the question they're actually
@@ -1692,6 +1702,21 @@ mod diagnostics_tests {
         inp.agent = Some(a);
         inp.terminal.cmd_resolved = Some("/Users/u/.nvm/versions/node/v20/bin/codex-acp".to_string());
         assert_eq!(compute_verdict(&inp).code, "terminal_only_path");
+    }
+
+    #[test]
+    fn verdict_terminal_only_path_without_npm_evidence() {
+        let mut inp = base_inputs();
+        inp.agent = Some(AgentDiag {
+            name: "Hermes Agent".to_string(),
+            cmd: "hermes".to_string(),
+            distribution: "npx",
+            ..Default::default()
+        });
+        inp.terminal.cmd_resolved = Some("/Users/u/.local/bin/hermes".to_string());
+        let v = compute_verdict(&inp);
+        assert_eq!(v.code, "terminal_only_path");
+        assert_eq!(v.level, DiagLevel::Fail);
     }
 
     #[test]
@@ -18097,6 +18122,41 @@ wire_api = "chat"
 
         assert_eq!(resolved, None);
         let _ = std::fs::remove_dir_all(prefix);
+    }
+
+    #[cfg(not(windows))]
+    #[tokio::test]
+    async fn npx_command_resolution_checks_local_bin_before_npm_prefix() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let home = tempfile::tempdir().expect("tempdir");
+        let bin_dir = home.path().join(".local").join("bin");
+        let prefix = home.path().join("npm-prefix");
+        let prefix_bin_dir = npm_prefix_bin_dir(&prefix);
+        let cmd = "codeg-test-local-bin-npx-agent";
+        let command_path = bin_dir.join(cmd);
+        for dir in [&bin_dir, &prefix_bin_dir] {
+            std::fs::create_dir_all(dir).expect("create bin directory");
+            let path = dir.join(cmd);
+            std::fs::write(&path, "").expect("write command");
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                .expect("mark command executable");
+        }
+
+        let (direct, listed) = temp_env::async_with_vars([("HOME", Some(home.path()))], async {
+            let direct = resolve_npx_command(cmd).await;
+            let listed = NpxCommandResolver {
+                request_npm_prefix: Some(Some(prefix.clone())),
+                ..Default::default()
+            }
+            .resolve_for_list(cmd)
+            .await;
+            (direct, listed)
+        })
+        .await;
+
+        assert_eq!(direct.as_deref(), Some(command_path.as_path()));
+        assert_eq!(listed.as_deref(), Some(command_path.as_path()));
     }
 
     fn write_skill_md(name: &str, body: &str) -> (PathBuf, PathBuf) {
