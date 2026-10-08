@@ -210,6 +210,72 @@ describe("DirectoryBrowser — new folder", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false)
   })
 
+  it("keeps the row on Escape while the folder is being created", async () => {
+    let finish: (path: string) => void = () => {}
+    api.createDirectory.mockImplementation(
+      () =>
+        new Promise<string>((resolve) => {
+          finish = resolve
+        })
+    )
+    render(<Harness />)
+    const input = await openNewFolderRow()
+    fireEvent.change(input, { target: { value: "slow" } })
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter" })
+    })
+    expect(onBusyChange).toHaveBeenLastCalledWith(true)
+    onBusyChange.mockClear()
+
+    fireEvent.keyDown(input, { key: "Escape" })
+
+    // The request can't be called back, so Escape does what the disabled X
+    // does: nothing. The row stays, the host stays busy, the dialog stays open.
+    expect(
+      screen.getByRole("textbox", { name: "Folder name" })
+    ).toBeInTheDocument()
+    expect(onBusyChange).not.toHaveBeenCalled()
+    expect(onOpenChange).not.toHaveBeenCalled()
+
+    listing.set("/home/me/slow", [])
+    await act(async () => {
+      finish("/home/me/slow")
+    })
+    await screen.findByDisplayValue("/home/me/slow")
+    expect(onBusyChange).toHaveBeenLastCalledWith(false)
+  })
+
+  it("still explains a failure that lands after Escape", async () => {
+    let fail: (reason: unknown) => void = () => {}
+    api.createDirectory.mockImplementation(
+      () =>
+        new Promise<string>((_, reject) => {
+          fail = reject
+        })
+    )
+    render(<Harness />)
+    const input = await openNewFolderRow()
+    fireEvent.change(input, { target: { value: "work" } })
+    await act(async () => {
+      fireEvent.keyDown(input, { key: "Enter" })
+    })
+    fireEvent.keyDown(input, { key: "Escape" })
+
+    await act(async () => {
+      fail(
+        appError("already_exists", "newFolder.errors.alreadyExists", {
+          name: "work",
+        })
+      )
+    })
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "“work” already exists here."
+    )
+    expect(input).toHaveValue("work")
+    expect(latestValue).toBe("/home/me")
+  })
+
   it("does nothing for a blank name", async () => {
     render(<Harness />)
     const input = await openNewFolderRow()

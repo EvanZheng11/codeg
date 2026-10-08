@@ -404,22 +404,8 @@ export const DirectoryBrowser = forwardRef<
     await navigateTo(created)
   }, [newFolder, rootPath, onValueChange, navigateTo, t])
 
-  // Escape belongs to the row while it is open. The host dialog dismisses on
-  // Escape from a capture listener on `document`, which runs before anything
-  // on the input itself, so the key is claimed on `window`, one step earlier.
-  const newFolderOpen = newFolder !== null
-  useEffect(() => {
-    if (!newFolderOpen) return
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || ime.isComposing(event)) return
-      if (event.target !== newFolderInputRef.current) return
-      event.preventDefault()
-      event.stopPropagation()
-      setNewFolder(null)
-    }
-    window.addEventListener("keydown", onKeyDown, true)
-    return () => window.removeEventListener("keydown", onKeyDown, true)
-  }, [newFolderOpen, ime])
+  // Stable, so the row's Escape listener is not re-registered on every render.
+  const closeNewFolder = useCallback(() => setNewFolder(null), [])
 
   const handlePathInputKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -586,7 +572,7 @@ export const DirectoryBrowser = forwardRef<
                 setNewFolder((prev) => prev && { ...prev, name, error: null })
               }
               onSubmit={handleCreateFolder}
-              onCancel={() => setNewFolder(null)}
+              onCancel={closeNewFolder}
             />
           ) : null}
           {renderEntries(rootPath, 0)}
@@ -638,9 +624,9 @@ function NavButton({
 
 /**
  * The name box "New folder" opens at the top of the listing. Enter creates;
- * Escape (claimed by the panel, see there) or the X cancels. The box stays
- * editable while the request runs, so a rejected name is fixed in place
- * without the caret jumping away.
+ * Escape or the X cancels. While the request runs the box is read-only rather
+ * than disabled, so it keeps focus and a rejected name is fixed in place
+ * without the caret jumping away; neither Escape nor the X cancels then.
  */
 function NewFolderRow({
   inputRef,
@@ -660,6 +646,26 @@ function NewFolderRow({
   const t = useTranslations("DirectoryBrowser")
   const ime = useImeGuard()
   const errorId = useId()
+
+  // Escape belongs to the row while it is open. The host dialog dismisses on
+  // Escape from a capture listener on `document`, which runs before anything
+  // on the input itself, so the key is claimed on `window`, one step earlier.
+  // It reads this row's own IME guard, the one spread on the input below.
+  // While the request runs the key is still claimed but, like the disabled X,
+  // cancels nothing: the folder is being made either way, and dropping the row
+  // would re-enable the host's confirm before the browser has moved into it.
+  const busy = draft.busy
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || ime.isComposing(event)) return
+      if (event.target !== inputRef.current) return
+      event.preventDefault()
+      event.stopPropagation()
+      if (!busy) onCancel()
+    }
+    window.addEventListener("keydown", onKeyDown, true)
+    return () => window.removeEventListener("keydown", onKeyDown, true)
+  }, [ime, inputRef, busy, onCancel])
 
   return (
     <div className="mb-1 space-y-1 rounded-md bg-muted/40 p-1.5">
