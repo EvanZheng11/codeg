@@ -11,6 +11,7 @@ import {
   useMemo,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
 } from "react"
@@ -127,6 +128,13 @@ const DEFAULT_FUSION_LAYOUT: [number, number] = [56, 44]
 const MIN_CENTER_WIDTH_PX = 420
 const MIN_WORKSPACE_HEIGHT_PX = 220
 const LAYOUT_EPSILON = 0.25
+// Skip-check for re-applying a pixel-derived shell layout. It must stay well
+// under one pixel: the panels are sized in percent, so a window resize keeps
+// the old percentages and only a re-applied layout pins the side columns back
+// to their pixel width. With LAYOUT_EPSILON (0.25% ≈ 3.6px at 1440px) here,
+// small resize steps were skipped until they added up, and the sidebar
+// divider drifted with the window and then snapped back — a visible jitter.
+const PIXEL_LAYOUT_EPSILON = 0.01
 // Slide duration for panel show/hide; must match the CSS transition on
 // `.panel-slide-animating > [data-panel]` in globals.css. The transition class
 // is held a touch past this so the animation finishes before it's removed
@@ -144,9 +152,13 @@ function TabKeysSync() {
   return null
 }
 
-function isSameLayout(a: number[], b: number[]): boolean {
+function isSameLayout(
+  a: number[],
+  b: number[],
+  epsilon: number = LAYOUT_EPSILON
+): boolean {
   if (a.length !== b.length) return false
-  return a.every((value, index) => Math.abs(value - b[index]) <= LAYOUT_EPSILON)
+  return a.every((value, index) => Math.abs(value - b[index]) <= epsilon)
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -766,23 +778,53 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
 
   const [shellWidth, setShellWidth] = useState(0)
   const [mainHeight, setMainHeight] = useState(0)
+  // The panels split the width LEFT OVER by the dividers, not the container's:
+  // an open divider is a fixed 1px flex item (a closed one is `w-0`), and the
+  // panels' percentages are shares of the remainder. Converting px <-> percent
+  // against the full container width left the side columns up to a pixel off
+  // their requested width, by an amount that changes with every window width —
+  // the divider crept sub-pixel on each resize step.
+  const shellHandlesWidth = (sidebarOpen ? 1 : 0) + (auxOpen ? 1 : 0)
+  const shellPanelsWidth =
+    shellWidth > 0 ? Math.max(1, shellWidth - shellHandlesWidth) : 0
+  const mainHandlesHeight = terminalOpen ? 1 : 0
+  const mainPanelsHeight =
+    mainHeight > 0 ? Math.max(1, mainHeight - mainHandlesHeight) : 0
 
   const shellDesiredLayoutRef = useRef<[number, number, number]>([0, 100, 0])
   const shellAppliedLayoutRef = useRef<[number, number, number] | null>(null)
   const mainDesiredLayoutRef = useRef<[number, number]>([100, 0])
   const mainAppliedLayoutRef = useRef<[number, number] | null>(null)
 
+  // A window resize needs no JS to keep the panes in place: the side columns
+  // and the terminal are sized in px through CSS (see the panel styles below)
+  // and the center / workspace pane flexes. The container size is only tracked
+  // to keep react-resizable-panels' percent layout and min/max in step, so an
+  // ordinary state update is enough: no frame depends on it being flushed
+  // synchronously, and none has to wait for a re-render of the shell.
+  //
+  // These flags cover the stretch from a container resize to the layout effect
+  // that applies the resulting layout: the onLayout calls in between (the
+  // library re-clamping the panels against the new min/max percentages, then
+  // our own setLayout) aren't user resizes, and must not be persisted — the
+  // re-clamp reports through an onLayout still holding the old container size.
+  const shellWidthRef = useRef(0)
+  const mainHeightRef = useRef(0)
+  const shellContainerResizingRef = useRef(false)
+  const mainContainerResizingRef = useRef(false)
+
   useEffect(() => {
     const container = shellContainerRef.current
     if (!container) return
 
-    const updateWidth = (next: number) => {
-      setShellWidth((prev) => (Math.abs(prev - next) < 1 ? prev : next))
-    }
-
-    updateWidth(container.clientWidth)
+    shellWidthRef.current = container.clientWidth
+    setShellWidth(container.clientWidth)
     const observer = new ResizeObserver((entries) => {
-      updateWidth(entries[0]?.contentRect.width ?? container.clientWidth)
+      const next = entries[0]?.contentRect.width ?? container.clientWidth
+      if (Math.abs(shellWidthRef.current - next) < 1) return
+      shellWidthRef.current = next
+      shellContainerResizingRef.current = true
+      setShellWidth(next)
     })
 
     observer.observe(container)
@@ -795,13 +837,14 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
     const container = mainContainerRef.current
     if (!container) return
 
-    const updateHeight = (next: number) => {
-      setMainHeight((prev) => (Math.abs(prev - next) < 1 ? prev : next))
-    }
-
-    updateHeight(container.clientHeight)
+    mainHeightRef.current = container.clientHeight
+    setMainHeight(container.clientHeight)
     const observer = new ResizeObserver((entries) => {
-      updateHeight(entries[0]?.contentRect.height ?? container.clientHeight)
+      const next = entries[0]?.contentRect.height ?? container.clientHeight
+      if (Math.abs(mainHeightRef.current - next) < 1) return
+      mainHeightRef.current = next
+      mainContainerResizingRef.current = true
+      setMainHeight(next)
     })
 
     observer.observe(container)
@@ -810,7 +853,9 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
     }
   }, [])
 
-  const buildShellLayout = useCallback((): [number, number, number] => {
+  // The side columns' widths in px: the requested widths, scaled down together
+  // when the window is too narrow to also leave MIN_CENTER_WIDTH_PX between.
+  const shellSides = useMemo(() => {
     const requestedLeft = sidebarOpen
       ? clamp(sidebarWidth, sidebarMinWidth, sidebarMaxWidth)
       : 0
@@ -819,7 +864,9 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
       : 0
 
     const totalWidth =
-      shellWidth > 0 ? shellWidth : requestedLeft + requestedRight + 960
+      shellPanelsWidth > 0
+        ? shellPanelsWidth
+        : requestedLeft + requestedRight + 960
 
     let left = requestedLeft
     let right = requestedRight
@@ -832,26 +879,51 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
       right *= scale
     }
 
-    const center = Math.max(1, totalWidth - left - right)
-    const total = left + center + right
-
-    return [(left / total) * 100, (center / total) * 100, (right / total) * 100]
+    return { left, right, totalWidth }
   }, [
     auxMaxWidth,
     auxMinWidth,
     auxOpen,
     auxWidth,
-    shellWidth,
+    shellPanelsWidth,
     sidebarMaxWidth,
     sidebarMinWidth,
     sidebarOpen,
     sidebarWidth,
   ])
 
-  const buildMainLayout = useCallback((): [number, number] => {
-    if (!terminalOpen) {
-      return [100, 0]
-    }
+  const buildShellLayout = useCallback((): [number, number, number] => {
+    const { left, right, totalWidth } = shellSides
+    const center = Math.max(1, totalWidth - left - right)
+    const total = left + center + right
+
+    return [(left / total) * 100, (center / total) * 100, (right / total) * 100]
+  }, [shellSides])
+
+  // The side panels are sized in px straight through CSS, overriding the
+  // `flex-grow: <percent>` react-resizable-panels writes (a Panel's `style`
+  // prop wins over its computed one), and the center — the only panel left
+  // growing — takes whatever remains. That style is rounded to 3 significant
+  // digits (`toPrecision(3)`, e.g. 20.83% → "20.8"): ~0.5px at 1440px wide, by
+  // an error that changes with every window width, so a sidebar sized through
+  // it wobbled on each resize step however precise the layout fed in. Pinned
+  // in px, a window resize leaves the side columns alone and only the center
+  // flexes. The library's layout is still kept in step (buildShellLayout) — it
+  // drives handle drags and the min/max clamping, and a drag reaches these px
+  // through handleShellLayout → setSidebarWidth / setAuxWidth.
+  const sidebarPanelStyle = useMemo(
+    () => ({ flexGrow: 0, flexShrink: 0, flexBasis: `${shellSides.left}px` }),
+    [shellSides.left]
+  )
+  const auxPanelStyle = useMemo(
+    () => ({ flexGrow: 0, flexShrink: 0, flexBasis: `${shellSides.right}px` }),
+    [shellSides.right]
+  )
+
+  // The terminal's height in px: the requested height, capped so the workspace
+  // above keeps MIN_WORKSPACE_HEIGHT_PX.
+  const terminalSize = useMemo(() => {
+    if (!terminalOpen) return { terminal: 0, totalHeight: 0 }
 
     const requestedTerminalHeight = clamp(
       terminalHeight,
@@ -859,27 +931,47 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
       terminalMaxHeight
     )
     const totalHeight =
-      mainHeight > 0 ? mainHeight : requestedTerminalHeight + 640
+      mainPanelsHeight > 0 ? mainPanelsHeight : requestedTerminalHeight + 640
 
     const maxTerminalHeight = Math.max(0, totalHeight - MIN_WORKSPACE_HEIGHT_PX)
     const terminal = Math.min(requestedTerminalHeight, maxTerminalHeight)
-    const workspace = Math.max(1, totalHeight - terminal)
-    const total = workspace + terminal
-
-    return [(workspace / total) * 100, (terminal / total) * 100]
+    return { terminal, totalHeight }
   }, [
-    mainHeight,
+    mainPanelsHeight,
     terminalHeight,
     terminalMaxHeight,
     terminalMinHeight,
     terminalOpen,
   ])
 
+  const buildMainLayout = useCallback((): [number, number] => {
+    if (!terminalOpen) {
+      return [100, 0]
+    }
+
+    const { terminal, totalHeight } = terminalSize
+    const workspace = Math.max(1, totalHeight - terminal)
+    const total = workspace + terminal
+
+    return [(workspace / total) * 100, (terminal / total) * 100]
+  }, [terminalOpen, terminalSize])
+
+  // Same px pinning as the side columns (see sidebarPanelStyle), so a window
+  // height change leaves the terminal alone and only the workspace flexes.
+  const terminalPanelStyle = useMemo(
+    () => ({
+      flexGrow: 0,
+      flexShrink: 0,
+      flexBasis: `${terminalSize.terminal}px`,
+    }),
+    [terminalSize.terminal]
+  )
+
   const applyShellLayout = useCallback((layout: [number, number, number]) => {
     shellDesiredLayoutRef.current = layout
     if (
       shellAppliedLayoutRef.current &&
-      isSameLayout(shellAppliedLayoutRef.current, layout)
+      isSameLayout(shellAppliedLayoutRef.current, layout, PIXEL_LAYOUT_EPSILON)
     ) {
       return
     }
@@ -899,7 +991,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
     mainDesiredLayoutRef.current = layout
     if (
       mainAppliedLayoutRef.current &&
-      isSameLayout(mainAppliedLayoutRef.current, layout)
+      isSameLayout(mainAppliedLayoutRef.current, layout, PIXEL_LAYOUT_EPSILON)
     ) {
       return
     }
@@ -915,12 +1007,16 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
     }
   }, [])
 
-  useEffect(() => {
+  // Layout effects so the library catches up in the same commit as the new
+  // container size; the resize flags end here (see the ResizeObserver note).
+  useLayoutEffect(() => {
     applyShellLayout(buildShellLayout())
+    shellContainerResizingRef.current = false
   }, [applyShellLayout, buildShellLayout])
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     applyMainLayout(buildMainLayout())
+    mainContainerResizingRef.current = false
   }, [applyMainLayout, buildMainLayout])
 
   const handleShellLayout = useCallback(
@@ -947,10 +1043,10 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
         return
       }
 
-      if (shellWidth <= 0) return
+      if (shellContainerResizingRef.current || shellPanelsWidth <= 0) return
 
       if (sidebarOpen) {
-        const nextSidebarWidth = (normalizedLayout[0] / 100) * shellWidth
+        const nextSidebarWidth = (normalizedLayout[0] / 100) * shellPanelsWidth
         const withinSidebarRange =
           nextSidebarWidth >= sidebarMinWidth - 1 &&
           nextSidebarWidth <= sidebarMaxWidth + 1
@@ -963,7 +1059,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
       }
 
       if (auxOpen) {
-        const nextAuxWidth = (normalizedLayout[2] / 100) * shellWidth
+        const nextAuxWidth = (normalizedLayout[2] / 100) * shellPanelsWidth
         const withinAuxRange =
           nextAuxWidth >= auxMinWidth - 1 && nextAuxWidth <= auxMaxWidth + 1
         if (withinAuxRange && Math.abs(nextAuxWidth - auxWidth) >= 1) {
@@ -979,7 +1075,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
       auxWidth,
       setAuxWidth,
       setSidebarWidth,
-      shellWidth,
+      shellPanelsWidth,
       sidebarMaxWidth,
       sidebarMinWidth,
       sidebarOpen,
@@ -1004,9 +1100,14 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
         return
       }
 
-      if (!terminalOpen || mainHeight <= 0) return
+      if (
+        !terminalOpen ||
+        mainContainerResizingRef.current ||
+        mainPanelsHeight <= 0
+      )
+        return
 
-      const nextTerminalHeight = (normalizedLayout[1] / 100) * mainHeight
+      const nextTerminalHeight = (normalizedLayout[1] / 100) * mainPanelsHeight
       const withinTerminalRange =
         nextTerminalHeight >= terminalMinHeight - 1 &&
         nextTerminalHeight <= terminalMaxHeight + 1
@@ -1019,7 +1120,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
     },
     [
       applyMainLayout,
-      mainHeight,
+      mainPanelsHeight,
       setTerminalHeight,
       terminalHeight,
       terminalMaxHeight,
@@ -1028,7 +1129,20 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
     ]
   )
 
-  const safeShellWidth = shellWidth > 0 ? shellWidth : 1440
+  // The panes' contents as stable elements: the shell re-renders on every
+  // container resize step (and on each drag step), and none of these read
+  // anything from it — they take their state from context — so React bails
+  // out of re-rendering their (large) subtrees instead of redoing the whole
+  // workspace each frame.
+  const sidebarElement = useMemo(() => <Sidebar />, [])
+  const auxElement = useMemo(() => <AuxPanel />, [])
+  const terminalElement = useMemo(() => <TerminalPanel />, [])
+  const workspaceElement = useMemo(
+    () => <WorkspaceContent>{children}</WorkspaceContent>,
+    [children]
+  )
+
+  const safeShellWidth = shellPanelsWidth > 0 ? shellPanelsWidth : 1440
   const sidebarSizeRange = resolvePanelSizeRange(
     sidebarMinWidth,
     sidebarMaxWidth,
@@ -1040,7 +1154,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
     safeShellWidth
   )
 
-  const safeMainHeight = mainHeight > 0 ? mainHeight : 900
+  const safeMainHeight = mainPanelsHeight > 0 ? mainPanelsHeight : 900
   const terminalSizeRange = resolvePanelSizeRange(
     terminalMinHeight,
     terminalMaxHeight,
@@ -1063,6 +1177,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
           id={FOLDER_SHELL_LEFT_PANEL_ID}
           order={1}
           defaultSize={18}
+          style={sidebarPanelStyle}
           minSize={sidebarOpen ? sidebarSizeRange.minSize : 0}
           maxSize={sidebarOpen ? sidebarSizeRange.maxSize : 0}
         >
@@ -1072,7 +1187,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
               slide — an un-backed wrapper would show the root `bg-background`
               (white) through that gap. */}
           <div className="h-full min-h-0 overflow-hidden ws-surface-sidebar">
-            <Sidebar />
+            {sidebarElement}
           </div>
         </ResizablePanel>
 
@@ -1109,7 +1224,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
                 defaultSize={72}
                 minSize={15}
               >
-                <WorkspaceContent>{children}</WorkspaceContent>
+                {workspaceElement}
               </ResizablePanel>
 
               {/* Closed, the handle gives up its BOX, not just its paint — and
@@ -1138,11 +1253,12 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
                 id={FOLDER_MAIN_TERMINAL_PANEL_ID}
                 order={2}
                 defaultSize={28}
+                style={terminalPanelStyle}
                 minSize={terminalOpen ? terminalSizeRange.minSize : 0}
                 maxSize={terminalOpen ? terminalSizeRange.maxSize : 0}
               >
                 <div className="h-full min-h-0 overflow-hidden">
-                  <TerminalPanel />
+                  {terminalElement}
                 </div>
               </ResizablePanel>
             </ResizablePanelGroup>
@@ -1161,6 +1277,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
           id={FOLDER_SHELL_RIGHT_PANEL_ID}
           order={3}
           defaultSize={18}
+          style={auxPanelStyle}
           minSize={auxOpen ? auxSizeRange.minSize : 0}
           maxSize={auxOpen ? auxSizeRange.maxSize : 0}
         >
@@ -1172,7 +1289,7 @@ function FolderWorkspaceShell({ children }: { children: React.ReactNode }) {
               to the old opaque wrapper, so the 240ms collapse slide still never
               flashes white while AuxPanel `return null`s. */}
           <div className="h-full min-h-0 overflow-hidden bg-background ws-transparent-bg">
-            <AuxPanel />
+            {auxElement}
           </div>
         </ResizablePanel>
       </ResizablePanelGroup>

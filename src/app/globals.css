@@ -1760,8 +1760,12 @@
    combinator scopes the transition to the group's own panels, so a horizontal
    (sidebar/aux) toggle never animates the nested vertical (terminal) group,
    and vice versa. */
+/* `flex-basis` too: the shell's side panels are sized by a px basis (see
+   FolderWorkspaceShell), so that is what changes when they open and close. */
 .panel-slide-animating > [data-panel] {
-  transition: flex-grow 240ms ease-out;
+  transition:
+    flex-grow 240ms ease-out,
+    flex-basis 240ms ease-out;
 }
 
 @media (prefers-reduced-motion: reduce) {
