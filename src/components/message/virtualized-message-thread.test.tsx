@@ -61,34 +61,64 @@ beforeEach(() => {
 })
 
 describe("VirtualizedMessageThread focus origin", () => {
-  it("marks pointer-origin focus and clears it on blur", () => {
-    renderThread()
-    const viewport = screen.getByTestId("viewport")
+  it("marks pointer-origin focus and clears it once focus moves away", () => {
+    vi.useFakeTimers()
+    try {
+      renderThread()
+      const viewport = screen.getByTestId("viewport")
+      const other = document.createElement("button")
+      document.body.appendChild(other)
 
-    pointerDown(screen.getByTestId("content"), 0)
+      pointerDown(screen.getByTestId("content"), 0)
 
-    expect(document.activeElement).toBe(viewport)
-    expect(viewport).toHaveAttribute("data-focus-origin", "pointer")
-    expect(viewport.className).toContain(
-      "data-[focus-origin=pointer]:focus-visible:ring-0"
-    )
+      expect(document.activeElement).toBe(viewport)
+      expect(viewport).toHaveAttribute("data-focus-origin", "pointer")
+      expect(viewport.className).toContain(
+        "data-[focus-origin=pointer]:focus-visible:ring-0"
+      )
 
-    fireEvent.blur(viewport)
-    expect(viewport).not.toHaveAttribute("data-focus-origin")
+      other.focus()
+      vi.runAllTimers()
+      expect(viewport).not.toHaveAttribute("data-focus-origin")
+      other.remove()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
-  it("clears the pointer marker on keyboard input so the ring returns", () => {
+  it("keeps the pointer marker when only the window loses focus", () => {
+    vi.useFakeTimers()
+    try {
+      renderThread()
+      const viewport = screen.getByTestId("viewport")
+
+      pointerDown(screen.getByTestId("content"), 0)
+
+      // Switching apps blurs the viewport but leaves it the active element;
+      // the browser re-focuses it when the window comes back (e.g. on a
+      // resize), and without the marker the ring would show then.
+      fireEvent.blur(viewport)
+      vi.runAllTimers()
+      expect(document.activeElement).toBe(viewport)
+      expect(viewport).toHaveAttribute("data-focus-origin", "pointer")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("keeps the pointer marker through keyboard input so no ring appears", () => {
     renderThread()
     const viewport = screen.getByTestId("viewport")
 
     pointerDown(screen.getByTestId("content"), 0)
     expect(viewport).toHaveAttribute("data-focus-origin", "pointer")
 
-    // Switching to keyboard scrolling drops the marker, so the suppressing
-    // `data-[focus-origin=pointer]` selector no longer matches and the
-    // keyboard focus ring becomes visible again.
+    // Any key press makes the browser match :focus-visible; the marker must
+    // survive it, or Esc (or keyboard scrolling) after a click would ring the
+    // whole transcript.
+    keyDown(viewport, "Escape")
     keyDown(viewport, "ArrowDown")
-    expect(viewport).not.toHaveAttribute("data-focus-origin")
+    expect(viewport).toHaveAttribute("data-focus-origin", "pointer")
     expect(document.activeElement).toBe(viewport)
   })
 
