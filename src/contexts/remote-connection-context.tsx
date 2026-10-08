@@ -15,7 +15,10 @@ import { useTranslations } from "next-intl"
 import {
   clearRemoteDesktopTransport,
   configureRemoteDesktopTransport,
+  getTransport,
 } from "@/lib/transport"
+import type { RemoteDesktopTransport } from "@/lib/transport/remote-desktop-transport"
+import { RemoteConnectionStatus } from "@/components/connection/remote-connection-status"
 import { resetBackendScopedStores } from "@/stores/backend-scoped-store-reset"
 import { getRemoteWorkspaceConnection } from "@/lib/remote-workspace"
 import { toErrorMessage } from "@/lib/app-error"
@@ -107,8 +110,14 @@ export function RemoteConnectionGate({ children }: { children: ReactNode }) {
           baseUrl: next.base_url,
           token: next.token,
           windowInstanceId: remoteWindowId,
-          onUnauthorized: () =>
-            setState((prev) => ({ ...prev, expired: true })),
+          onUnauthorized: (source) => {
+            // Legacy desktop proxies also stop with this WS signal after
+            // network failures. Let the health indicator offer reconnect;
+            // only a confirmed HTTP 401 should claim credentials expired.
+            if (source !== "websocket") {
+              setState((prev) => ({ ...prev, expired: true }))
+            }
+          },
         })
         setState({
           connection: next,
@@ -213,6 +222,11 @@ export function RemoteConnectionGate({ children }: { children: ReactNode }) {
   return (
     <RemoteConnectionContext.Provider value={value}>
       {children}
+      {hasRemoteConnection && (
+        <RemoteConnectionStatus
+          transport={getTransport() as RemoteDesktopTransport}
+        />
+      )}
     </RemoteConnectionContext.Provider>
   )
 }

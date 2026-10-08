@@ -38,10 +38,8 @@ pub struct RemoteWorkspaceConnectionInput {
     pub headers: Vec<RemoteWorkspaceHeader>,
 }
 
-/// The same check a remote workspace window has to pass before it opens, for
-/// every caller that opens one: the "Open remote workspace" menus, and the
-/// launch reopening the windows that were open at the last quit
-/// (`workspace_windows`).
+/// Validate connections opened manually. Restoring a saved workspace skips
+/// this probe so an offline launch preserves its window and reconnects later.
 #[cfg(feature = "tauri-runtime")]
 pub(crate) async fn validate_remote_health(
     base_url: &str,
@@ -225,8 +223,8 @@ pub async fn open_remote_workspace(
     build_remote_workspace_window(&app, &connection)
 }
 
-/// Build the workspace window for `connection`, which the caller has already
-/// run [`validate_remote_health`] against and found without a window.
+/// Build the workspace window for a saved connection, without probing its
+/// host. Manual opens validate health first; session restores may be offline.
 #[cfg(feature = "tauri-runtime")]
 pub(crate) fn build_remote_workspace_window(
     app: &AppHandle,

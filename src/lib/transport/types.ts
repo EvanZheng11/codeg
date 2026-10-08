@@ -8,7 +8,12 @@ export interface RemoteTransportConfig {
   baseUrl: string
   token: string
   windowInstanceId: string
-  onUnauthorized?: () => void
+  /**
+   * HTTP failures confirm rejected credentials. Older desktop WS proxies
+   * also emit their terminal unauthorized signal after network failures;
+   * distinguish that ambiguous source so the UI does not claim expiry.
+   */
+  onUnauthorized?: (source?: "websocket") => void
 }
 
 /**
@@ -121,7 +126,9 @@ export interface Transport {
    * `receiver_count == 0`, so anything fired between `onclose` and the next
    * `__ready__` is lost. Re-fetching backend snapshots is the recovery path.
    *
-   * Not fired on the initial connect (consumers handle that separately).
+   * Not fired on a clean initial connect (consumers handle that separately).
+   * A transport may notify on its first successful connection if offline
+   * startup reads failed and the consumers need to retry hydration.
    * Returns an unsubscribe function. Optional — IPC-only transports (e.g.
    * Tauri) leave this undefined.
    */

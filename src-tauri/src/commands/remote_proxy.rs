@@ -1762,6 +1762,7 @@ async fn run_ws_task(
     let event_name = format!("remote-ws-event-{connection_id}");
     let ws_url = http_url_to_ws_url(&base_url, WS_EVENTS_PATH);
     let mut fail_count: u32 = 0;
+    let mut terminal_failure = false;
 
     'reconnect: loop {
         if *shutdown_rx.borrow() {
@@ -1785,7 +1786,7 @@ async fn run_ws_task(
                 tracing::error!("[RemoteProxy] WS connect failed for connection {connection_id}: {err}");
                 fail_count += 1;
                 if fail_count >= WS_RECONNECT_FAIL_THRESHOLD {
-                    emit_internal(&app, &entry, &event_name, WS_UNAUTHORIZED_CHANNEL).await;
+                    terminal_failure = true;
                     break;
                 }
                 if backoff_sleep(&mut shutdown_rx, fail_count).await {
@@ -1860,7 +1861,7 @@ async fn run_ws_task(
         emit_internal(&app, &entry, &event_name, WS_DISCONNECTED_CHANNEL).await;
         fail_count += 1;
         if fail_count >= WS_RECONNECT_FAIL_THRESHOLD {
-            emit_internal(&app, &entry, &event_name, WS_UNAUTHORIZED_CHANNEL).await;
+            terminal_failure = true;
             break;
         }
         if backoff_sleep(&mut shutdown_rx, fail_count).await {
@@ -1870,16 +1871,43 @@ async fn run_ws_task(
 
     *entry.ready.write().await = false;
 
+    // Remove before notifying the frontend that retries stopped. A manual
+    // in-place retry must create a live task, never rejoin this dying entry.
+    remove_finished_ws_task(&proxy, connection_id, &entry, || async {
+        if terminal_failure {
+            emit_internal(&app, &entry, &event_name, WS_UNAUTHORIZED_CHANNEL).await;
+        }
+    })
+    .await;
+}
+
+async fn remove_finished_ws_task<F, Fut>(
+    proxy: &Arc<RemoteProxyState>,
+    connection_id: i32,
+    entry: &Arc<WsTaskEntry>,
+    notify: F,
+) -> bool
+where
+    F: FnOnce() -> Fut,
+    Fut: std::future::Future<Output = ()>,
+{
     // Cleanup: remove our entry from the proxy state. We only remove if
     // the stored Arc still points to us — a fresh resubscribe between
     // our shutdown signal and this cleanup could have already replaced
     // it, and we mustn't blow away the newer entry.
     let mut tasks = proxy.tasks.lock().await;
     if let Some(stored) = tasks.get(&connection_id) {
-        if Arc::ptr_eq(stored, &entry) {
+        if Arc::ptr_eq(stored, entry) {
             tasks.remove(&connection_id);
+            // Keep the map locked until the terminal event is enqueued.
+            // Otherwise another window could create a fresh task between
+            // removal and notification, then receive the old task's failure.
+            // Lock order remains tasks -> subscribers, as in subscribe.
+            notify().await;
+            return true;
         }
     }
+    false
 }
 
 /// Sleep for the exponential-backoff duration corresponding to
@@ -2047,6 +2075,56 @@ mod tests {
             shutdown_tx,
             outbound_tx,
         })
+    }
+
+    #[tokio::test]
+    async fn finished_ws_task_is_removed_before_a_manual_retry_registers() {
+        let proxy = Arc::new(RemoteProxyState::new());
+        let finished = test_entry(HashMap::from([
+            (
+                "workspace".to_string(),
+                subscriber("remote-workspace-1", "workspace"),
+            ),
+            (
+                "settings".to_string(),
+                subscriber("remote-settings-1", "settings"),
+            ),
+        ]));
+        proxy.tasks.lock().await.insert(1, finished.clone());
+
+        // run_ws_task awaits this removal before its terminal notification.
+        // Even a shared task must be absent when that signal enables Retry.
+        assert!(
+            remove_finished_ws_task(&proxy, 1, &finished, || async {
+                assert!(proxy.tasks.try_lock().is_err());
+            })
+            .await
+        );
+        assert!(!proxy.tasks.lock().await.contains_key(&1));
+
+        let replacement = test_entry(HashMap::new());
+        proxy.tasks.lock().await.insert(1, replacement.clone());
+        assert!(
+            !remove_finished_ws_task(&proxy, 1, &finished, || async {
+                panic!("an old task must not notify after its replacement registers");
+            })
+            .await
+        );
+        let tasks = proxy.tasks.lock().await;
+        assert!(Arc::ptr_eq(tasks.get(&1).unwrap(), &replacement));
+    }
+
+    #[tokio::test]
+    async fn finished_ws_task_cleanup_preserves_other_remote_connections() {
+        let proxy = Arc::new(RemoteProxyState::new());
+        let finished = test_entry(HashMap::new());
+        let other = test_entry(HashMap::new());
+        proxy.tasks.lock().await.insert(1, finished.clone());
+        proxy.tasks.lock().await.insert(2, other.clone());
+
+        assert!(remove_finished_ws_task(&proxy, 1, &finished, || async {}).await);
+        let tasks = proxy.tasks.lock().await;
+        assert!(Arc::ptr_eq(tasks.get(&2).unwrap(), &other));
     }
 
     // ─── Host pinning for credential-carrying requests ──────────────────

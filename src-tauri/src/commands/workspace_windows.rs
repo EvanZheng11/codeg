@@ -14,9 +14,9 @@
 //!   * `main` is always built — the tray, the dock, deep links and the close
 //!     prompt all hang off it — but it starts hidden when it had been closed
 //!     (hidden to the tray) at quit and something else is coming back instead.
-//!   * The remote windows reopen in the background, behind the same health
-//!     check a manual open runs, and in the remembered order, so the window
-//!     that was in front at quit is in front again.
+//!   * Saved remote windows reopen even while their hosts are offline. Their
+//!     transports reconnect in the background; an outage must not erase the
+//!     remembered session. The remembered front window is focused last.
 //!   * A remote workspace that cannot be reopened brings `main` up with a toast
 //!     saying why ([`take_workspace_restore_failures`]), rather than leaving a
 //!     window silently missing — or no window at all.
@@ -255,7 +255,7 @@ impl SessionState {
         }
     }
 
-    /// A remembered window this launch could not reopen. Only its pending
+    /// A remembered window this launch could not build. Only its pending
     /// entry goes: if the user opened it by hand meanwhile, that window is open
     /// and stays in the list.
     fn forget_pending(&mut self, window: WorkspaceWindow) -> Change {
@@ -265,6 +265,22 @@ impl SessionState {
             Change::None
         } else {
             Change::Membership
+        }
+    }
+
+    fn should_reopen(&self, window: WorkspaceWindow) -> bool {
+        !self.frozen && self.pending.contains(&window)
+    }
+
+    fn should_focus_after_restore(&self, window: WorkspaceWindow) -> bool {
+        !self.frozen && self.open.contains(&window)
+    }
+
+    fn mark_restored_focus(&mut self, window: WorkspaceWindow) -> Change {
+        if self.should_focus_after_restore(window) {
+            self.mark_open(window)
+        } else {
+            Change::None
         }
     }
 
@@ -315,10 +331,6 @@ impl WorkspaceWindowSession {
     fn freeze(&self) -> bool {
         let mut state = self.lock();
         !std::mem::replace(&mut state.frozen, true)
-    }
-
-    fn is_frozen(&self) -> bool {
-        self.lock().frozen
     }
 
     /// Store the list as it is now, unless that is what is stored already.
@@ -517,42 +529,19 @@ async fn reopen_remote_windows(
     connections: Vec<RemoteWorkspaceConnectionInfo>,
     front: WorkspaceWindow,
 ) {
-    // Every health check starts now, but the windows open in the remembered
-    // order, so the one that was in front at quit is also the last to open. A
-    // slow host holds back the windows after it, and nothing else.
-    let checks: Vec<_> = connections
-        .into_iter()
-        .map(|connection| {
-            let base_url = connection.base_url.clone();
-            let token = connection.token.clone();
-            let headers = connection.headers.clone();
-            let check = tauri::async_runtime::spawn(async move {
-                crate::commands::remote_workspace::validate_remote_health(
-                    &base_url, &token, &headers,
-                )
-                .await
-            });
-            (connection, check)
-        })
-        .collect();
-
     let mut failures = Vec::new();
-    for (connection, check) in checks {
-        let checked = match check.await {
-            Ok(result) => result,
-            Err(err) => Err(
-                AppCommandError::network("Remote Workspace health check failed")
-                    .with_detail(err.to_string()),
-            ),
-        };
-        let opened = checked.and_then(|()| reopen_remote_window(app, &connection));
+    for connection in connections {
+        // These are saved, previously validated connections. Build the local
+        // shell without a network probe: the transport displays connectivity
+        // state and retries, including after an offline launch. A failed probe
+        // used to discard this window from the next saved session.
+        let opened = reopen_remote_window(app, &connection);
         if let Err(error) = opened {
             let window = WorkspaceWindow::Remote {
                 connection_id: connection.id,
             };
-            // The checks all started together, so this result can be older than
-            // a manual open that has since succeeded. That window stands, and
-            // there is nothing to report.
+            // A concurrent manual open may have created the same window.
+            // That window stands, and there is nothing to report.
             if app.get_webview_window(&window.label()).is_some() {
                 continue;
             }
@@ -581,12 +570,13 @@ fn reopen_remote_window(
         connection_id: connection.id,
     };
     if let Some(session) = app.try_state::<WorkspaceWindowSession>() {
-        // Quitting: a window built now would only be torn down again.
-        if session.is_frozen() {
+        // Quitting, or manually opened and then closed while this restore
+        // was starting: do not revive a window the user just dismissed.
+        if !session.lock().should_reopen(window) {
             return Ok(());
         }
     }
-    // Opened by hand while its health check was still running. Building it
+    // Opened by hand while this restore was starting. Building it
     // recorded it, and the user may have moved on to another window since, so
     // it is not brought forward in the list again here.
     if app.get_webview_window(&window.label()).is_some() {
@@ -606,13 +596,18 @@ fn finish_restore(app: &AppHandle, front: WorkspaceWindow, failures: Vec<Workspa
         }
         state.open.is_empty()
     };
+    let focus_front = session.lock().should_focus_after_restore(front);
     if !failures.is_empty() || nothing_open {
         // The toast saying why a window did not come back is shown in `main`;
         // and with nothing reopened, `main` is all there is.
         crate::commands::windows::show_main_window(app);
-    } else if let Some(window) = app.get_webview_window(&front.label()) {
-        let _ = window.set_focus();
-        note_opened(app, front);
+    } else if focus_front {
+        if let Some(window) = app.get_webview_window(&front.label()) {
+            let _ = window.set_focus();
+            // A close can arrive after the focus decision. Reorder only if
+            // still open; never insert a just-closed workspace again.
+            record(app, |state| state.mark_restored_focus(front));
+        }
     }
     if !failures.is_empty() {
         session.lock().failures.extend(failures);
@@ -670,6 +665,30 @@ mod tests {
         ] {
             assert_eq!(WorkspaceWindow::from_label(other), None, "{other}");
         }
+    }
+
+    #[test]
+    fn a_workspace_closed_during_restore_is_not_revived() {
+        let mut state = SessionState {
+            open: vec![LOCAL],
+            pending: vec![remote(1), remote(2)],
+            restoring: true,
+            ..SessionState::default()
+        };
+        assert!(state.should_reopen(remote(1)));
+        state.mark_open(remote(1));
+        state.mark_closed(remote(1));
+        assert!(!state.should_reopen(remote(1)));
+        assert!(state.should_reopen(remote(2)));
+
+        assert!(state.should_focus_after_restore(LOCAL));
+        state.mark_closed(LOCAL);
+        // main still exists in Tauri, but was intentionally hidden to tray.
+        assert!(!state.should_focus_after_restore(LOCAL));
+        assert_eq!(state.mark_restored_focus(LOCAL), Change::None);
+        state.mark_open(remote(2));
+        assert!(state.should_focus_after_restore(remote(2)));
+        assert_eq!(state.snapshot(), vec![remote(2)]);
     }
 
     #[test]
@@ -822,7 +841,7 @@ mod tests {
             pending: vec![remote(1), remote(2)],
             ..SessionState::default()
         };
-        // Remote 2 is opened by hand before its (failed) check is processed.
+        // Remote 2 is opened by hand before its build failure is processed.
         state.mark_open(remote(2));
         assert_eq!(state.forget_pending(remote(2)), Change::None);
         assert_eq!(state.snapshot(), vec![remote(1), remote(2)]);
@@ -906,9 +925,8 @@ mod tests {
         assert_eq!(restore.plan.front, remote(two.id));
     }
 
-    /// Remote A's check is slow and remote B's fails at once; B's host then
-    /// recovers and the user opens B by hand before the restore gets to B's
-    /// failure. B is open, so the quit keeps it and the next launch reopens it.
+    /// A concurrent manual open wins over a restore failure for the same
+    /// window. The next quit must still remember the successfully opened one.
     #[tokio::test]
     async fn a_window_opened_by_hand_during_the_restore_is_remembered() {
         let db = fresh_in_memory_db().await;
@@ -937,7 +955,7 @@ mod tests {
             state.pending = vec![remote(a.id), remote(b.id)];
             state.restoring = true;
         }
-        // B, opened by hand; then A, reopened; then B's stale failure.
+        // B, opened by hand; then A, reopened; then B's stale build failure.
         session.apply(|state| state.mark_open(remote(b.id)));
         session.apply(|state| state.mark_open(remote(a.id)));
         session.apply(|state| state.forget_pending(remote(b.id)));
@@ -948,6 +966,40 @@ mod tests {
         let restore = load_restore(&db.conn, false, true).await;
         assert_eq!(restore.plan.remotes, vec![b.id, a.id]);
         assert_eq!(restore.plan.front, remote(a.id));
+    }
+
+    #[tokio::test]
+    async fn an_offline_remote_shell_survives_quit_but_an_explicit_close_does_not() {
+        let db = fresh_in_memory_db().await;
+        // Restoring a saved shell must not contact this unreachable host.
+        let connection = remote_workspace_connection_service::create(
+            &db.conn,
+            "offline",
+            "http://127.0.0.1:1",
+            "token",
+            &[],
+        )
+        .await
+        .unwrap();
+        let window = remote(connection.id);
+        let session = WorkspaceWindowSession::new();
+        session.apply(|state| state.mark_open(window));
+        session.freeze();
+        session.write_latest(&db.conn).await;
+        let restore = load_restore(&db.conn, false, true).await;
+        assert!(!restore.show_local());
+        assert_eq!(restore.plan.remotes, vec![connection.id]);
+
+        // A shell closing deliberately while the server remains unavailable
+        // still leaves the session. We do not revive every saved connection.
+        let closed_session = WorkspaceWindowSession::new();
+        closed_session.apply(|state| state.mark_open(window));
+        closed_session.apply(|state| state.mark_closed(window));
+        closed_session.freeze();
+        closed_session.write_latest(&db.conn).await;
+        let restore = load_restore(&db.conn, false, true).await;
+        assert!(restore.show_local());
+        assert!(restore.plan.remotes.is_empty());
     }
 
     #[tokio::test]
