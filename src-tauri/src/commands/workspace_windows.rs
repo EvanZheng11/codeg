@@ -268,6 +268,23 @@ impl SessionState {
         }
     }
 
+    /// Activation follows workspace focus, not auxiliary windows or the
+    /// always-built but tray-hidden local window. None means restoration is
+    /// still building the only workspaces; showing local now would reopen it.
+    fn activation_target(
+        &self,
+        exists: impl Fn(WorkspaceWindow) -> bool,
+    ) -> Option<WorkspaceWindow> {
+        self.open
+            .iter()
+            .rev()
+            .copied()
+            .find(|window| exists(*window))
+            .or_else(|| {
+                (!self.restoring || self.pending.is_empty()).then_some(WorkspaceWindow::Local)
+            })
+    }
+
     /// The list to store, least recently focused first.
     fn snapshot(&self) -> Vec<WorkspaceWindow> {
         self.pending.iter().chain(&self.open).copied().collect()
@@ -403,6 +420,21 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
             record(window.app_handle(), |state| state.mark_closed(workspace));
         }
         _ => {}
+    }
+}
+
+/// Bring the most recently used workspace forward on Dock activation. A
+/// hidden/minimized remote still counts as open. Only fall back to local when
+/// no workspace remains, never while a remote-only launch is restoring.
+pub fn activate_workspace(app: &AppHandle) {
+    let target = match app.try_state::<WorkspaceWindowSession>() {
+        Some(session) => session
+            .lock()
+            .activation_target(|window| app.get_webview_window(&window.label()).is_some()),
+        None => Some(WorkspaceWindow::Local),
+    };
+    if let Some(target) = target {
+        crate::commands::windows::show_and_focus_window(app, &target.label());
     }
 }
 
@@ -670,6 +702,46 @@ mod tests {
         ] {
             assert_eq!(WorkspaceWindow::from_label(other), None, "{other}");
         }
+    }
+
+    #[test]
+    fn activation_prefers_the_most_recent_existing_workspace() {
+        let mut state = SessionState::default();
+        state.mark_open(LOCAL);
+        state.mark_open(remote(1));
+        state.mark_open(remote(2));
+        assert_eq!(state.activation_target(|_| true), Some(remote(2)));
+        assert_eq!(
+            state.activation_target(|window| window != remote(2)),
+            Some(remote(1))
+        );
+        state.mark_open(LOCAL);
+        assert_eq!(state.activation_target(|_| true), Some(LOCAL));
+    }
+
+    #[test]
+    fn activation_does_not_reopen_a_closed_local_workspace() {
+        let mut state = SessionState::default();
+        state.mark_open(LOCAL);
+        state.mark_open(remote(1));
+        state.mark_closed(LOCAL);
+        // main still physically exists, hidden to tray; it must stay hidden.
+        assert_eq!(state.activation_target(|_| true), Some(remote(1)));
+        state.mark_closed(remote(1));
+        assert_eq!(state.activation_target(|_| true), Some(LOCAL));
+    }
+
+    #[test]
+    fn activation_waits_for_a_remote_only_restore() {
+        let mut state = SessionState {
+            pending: vec![remote(1)],
+            restoring: true,
+            ..SessionState::default()
+        };
+        assert_eq!(state.activation_target(|window| window == LOCAL), None);
+        state.mark_open(remote(1));
+        assert_eq!(state.activation_target(|_| true), Some(remote(1)));
+        assert_eq!(state.snapshot(), vec![remote(1)]);
     }
 
     #[test]
