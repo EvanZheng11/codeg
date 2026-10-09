@@ -15,6 +15,12 @@ const h = vi.hoisted(() => ({
   kill: vi.fn(async () => {}),
   write: vi.fn(async () => {}),
   resize: vi.fn(async () => {}),
+  // The pane size a fit lands on; null leaves the emulator's size alone.
+  pane: null as { cols: number; rows: number } | null,
+  // While set, xterm "has not drawn" what was written: parse callbacks wait.
+  holdParse: false,
+  parsed: [] as (() => void)[],
+  fontSize: 12,
   onData: null as ((data: string) => void) | null,
   onResize: null as ((size: { cols: number; rows: number }) => void) | null,
   handlers: new Map<string, (event: TerminalEvent) => void>(),
@@ -52,7 +58,7 @@ vi.mock("@/hooks/use-appearance", () => ({
   useZoomLevel: () => ({ zoomLevel: 100 }),
   useTerminalFont: () => ({
     terminalFontStack: "monospace",
-    terminalFontSize: 12,
+    terminalFontSize: h.fontSize,
     terminalLigatures: false,
   }),
 }))
@@ -75,7 +81,9 @@ vi.mock("@xterm/xterm", () => ({
     }
     options = { fontFamily: "", fontSize: 12, theme: {} }
     modes = { applicationCursorKeysMode: false }
-    loadAddon() {}
+    loadAddon(addon: { activate?: (term: unknown) => void }) {
+      addon.activate?.(this)
+    }
     open() {}
     attachCustomKeyEventHandler() {}
     onData(cb: (data: string) => void) {
@@ -105,7 +113,9 @@ vi.mock("@xterm/xterm", () => ({
     }
     write(data: string, parsed?: () => void) {
       if (data) h.writes.push(data)
-      parsed?.()
+      if (!parsed) return
+      if (h.holdParse) h.parsed.push(parsed)
+      else parsed()
     }
     reset() {
       h.resets++
@@ -120,8 +130,13 @@ vi.mock("@xterm/xterm", () => ({
 vi.mock("@xterm/addon-ligatures", () => ({ LigaturesAddon: class {} }))
 vi.mock("@xterm/addon-fit", () => ({
   FitAddon: class {
+    term: { resize: (cols: number, rows: number) => void } | null = null
+    activate(term: { resize: (cols: number, rows: number) => void }) {
+      this.term = term
+    }
     fit() {
       h.fits++
+      if (h.pane) this.term?.resize(h.pane.cols, h.pane.rows)
     }
   },
 }))
@@ -168,6 +183,10 @@ describe("TerminalView recovery", () => {
     h.resize.mockClear()
     h.onData = null
     h.onResize = null
+    h.pane = null
+    h.holdParse = false
+    h.parsed.length = 0
+    h.fontSize = 12
     h.handlers.clear()
     h.ready = null
   })
@@ -932,6 +951,152 @@ describe("TerminalView recovery", () => {
         await new Promise((resolve) => setTimeout(resolve, 60))
       })
       expect(h.fits).toBeGreaterThan(fitted)
+      view.unmount()
+    } finally {
+      width.mockRestore()
+      height.mockRestore()
+    }
+  })
+
+  it("leaves a restored tab unconfirmed when its last probe could not reach the backend", async () => {
+    // "Missing" early in the probe can be out of date: the spawn it raced may
+    // have landed while the later probes failed. Only the last answer counts.
+    const clock = vi
+      .spyOn(Date, "now")
+      .mockImplementation(() =>
+        h.snapshot.mock.calls.length >= 2 ? 20_000 : 0
+      )
+    h.snapshot.mockResolvedValueOnce({
+      exists: false,
+      alive: false,
+      data: "",
+      seq: 0,
+      exit_code: null,
+      generation: null,
+    })
+    h.snapshot.mockRejectedValueOnce(new Error("offline"))
+    const exited = vi.fn()
+    const view = render(
+      <TerminalView
+        {...props}
+        attach
+        spawnOnMissing={false}
+        reuseCompleted
+        onProcessExited={exited}
+      />
+    )
+    await waitFor(() => expect(h.writes.join("")).toContain("unavailable"))
+    clock.mockRestore()
+    expect(h.snapshot).toHaveBeenCalledTimes(2)
+    expect(exited).not.toHaveBeenCalled()
+    act(() => {
+      h.onData?.("x")
+    })
+    await waitFor(() => expect(h.write).toHaveBeenCalledWith("terminal-1", "x"))
+    view.unmount()
+  })
+
+  it("drops a resize queued for the pane before the snapshot set the size", async () => {
+    // A fit before the handshake queues the PTY a size. Adopting the PTY's
+    // own size from the snapshot makes that queued size stale: sent later,
+    // it would leave the PTY at a size the pane no longer has.
+    const width = vi
+      .spyOn(Element.prototype, "clientWidth", "get")
+      .mockReturnValue(800)
+    const height = vi
+      .spyOn(Element.prototype, "clientHeight", "get")
+      .mockReturnValue(600)
+    try {
+      let finishHandshake!: (value: TerminalSnapshot) => void
+      h.snapshot.mockResolvedValueOnce({
+        exists: false,
+        alive: false,
+        data: "",
+        seq: 0,
+        exit_code: null,
+        generation: null,
+      })
+      h.snapshot.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishHandshake = resolve
+          })
+      )
+      const view = render(<TerminalView {...props} attach />)
+      await waitFor(() => expect(h.snapshot).toHaveBeenCalledTimes(2))
+
+      // Re-activated while the handshake is out: the pane fits to 133x41.
+      h.pane = { cols: 133, rows: 41 }
+      view.rerender(<TerminalView {...props} attach isActive={false} />)
+      view.rerender(<TerminalView {...props} attach />)
+      await waitFor(() => expect(h.writes).toContain("<resize 133x41>"))
+
+      // The pane is back to the PTY's size by the time the handshake lands.
+      h.pane = { cols: 80, rows: 24 }
+      await act(async () => {
+        finishHandshake({ ...snapshot("prompt$ ", 1), cols: 80, rows: 24 })
+      })
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 120))
+      })
+      expect(h.resize).not.toHaveBeenCalledWith("terminal-1", 133, 41)
+      view.unmount()
+    } finally {
+      width.mockRestore()
+      height.mockRestore()
+    }
+  })
+
+  it("holds every fit until a replay has been drawn", async () => {
+    // xterm draws a write later. A fit landing before that would lay the
+    // replay out at the pane's width — the stray "%" line again.
+    const width = vi
+      .spyOn(Element.prototype, "clientWidth", "get")
+      .mockReturnValue(800)
+    const height = vi
+      .spyOn(Element.prototype, "clientHeight", "get")
+      .mockReturnValue(600)
+    try {
+      h.holdParse = true
+      h.pane = { cols: 90, rows: 30 }
+      h.snapshot.mockResolvedValueOnce({
+        ...snapshot("wide replay", 3),
+        cols: 133,
+        rows: 41,
+      })
+      const view = render(
+        <TerminalView {...props} attach spawnOnMissing={false} reuseCompleted />
+      )
+      await waitFor(() => expect(h.writes).toContain("wide replay"))
+      // The initial fit, a re-activation and a font change all come and go
+      // meanwhile.
+      h.fontSize = 14
+      view.rerender(
+        <TerminalView
+          {...props}
+          attach
+          spawnOnMissing={false}
+          reuseCompleted
+          isActive={false}
+        />
+      )
+      view.rerender(
+        <TerminalView {...props} attach spawnOnMissing={false} reuseCompleted />
+      )
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 80))
+      })
+      expect(h.writes).not.toContain("<resize 90x30>")
+
+      // Drawn: now the pane gets its own size.
+      h.holdParse = false
+      await act(async () => {
+        for (const parsed of h.parsed.splice(0)) parsed()
+        await new Promise((resolve) => setTimeout(resolve, 80))
+      })
+      expect(h.writes.indexOf("<resize 90x30>")).toBeGreaterThan(
+        h.writes.indexOf("wide replay")
+      )
       view.unmount()
     } finally {
       width.mockRestore()

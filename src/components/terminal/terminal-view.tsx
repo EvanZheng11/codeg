@@ -135,6 +135,9 @@ export function TerminalView({
   const fitAddonRef = useRef<{ fit: () => void } | null>(null)
   const termRef = useRef<XTermTerminal | null>(null)
   const lastResizeRef = useRef<{ cols: number; rows: number } | null>(null)
+  // Snapshot replays still waiting for xterm to draw them. A fit in that
+  // window would lay the replay out at the pane's width, not the PTY's.
+  const replayGateRef = useRef<{ pending: number } | null>(null)
   const isActiveRef = useRef(isActive)
   const isVisibleRef = useRef(isVisible)
   const onProcessExitedRef = useRef(onProcessExited)
@@ -316,6 +319,8 @@ export function TerminalView({
 
       fitAddonRef.current = fitAddon
       termRef.current = term
+      const replays = { pending: 0 }
+      replayGateRef.current = replays
 
       if (terminalLigaturesRef.current) {
         enableTerminalLigatures(
@@ -532,7 +537,7 @@ export function TerminalView({
 
       const fitIfReady = () => {
         const el = containerRef.current
-        if (!el) return
+        if (!el || replays.pending > 0) return
         if (!isActiveRef.current || !isVisibleRef.current) return
         if (el.clientWidth <= 0 || el.clientHeight <= 0) return
         fitAddon.fit()
@@ -552,11 +557,17 @@ export function TerminalView({
           // Replay at the size the output was laid out for. Drawn narrower,
           // a full-width line wraps: zsh pads its end-of-output mark to the
           // right edge, and a stray "%" line is left behind. The PTY is this
-          // size already, so this sends no resize; fitting to the pane does,
+          // size already, so this sends no resize, and one still queued from
+          // an earlier fit is stale. Fitting to the pane sends the right one,
           // once the replay below has been drawn.
+          if (resizeTimer) {
+            clearTimeout(resizeTimer)
+            resizeTimer = null
+          }
           lastResizeRef.current = { cols: snapshot.cols, rows: snapshot.rows }
           term.resize(snapshot.cols, snapshot.rows)
         }
+        replays.pending++
         if (snapshot.data) term.write(snapshot.data)
         const pendingExits = exitsWhileBuffering
         exitsWhileBuffering = []
@@ -565,7 +576,9 @@ export function TerminalView({
           showExit(snapshot.exit_code)
         }
         // xterm parses writes later, in order; this runs after all of them.
+        // Until then every fit waits (see `fitIfReady`), then one catches up.
         term.write("", () => {
+          replays.pending--
           requestAnimationFrame(() => {
             if (!cancelled) fitIfReady()
           })
@@ -576,6 +589,7 @@ export function TerminalView({
       /** 卸载已经发生：拆掉这次挂载建立的一切。attach 模式下 PTY 不归这次挂载，
        *  所以调用方各自决定要不要 kill。 */
       const teardown = () => {
+        if (replayGateRef.current === replays) replayGateRef.current = null
         writeQueue.dispose()
         themeObserver.disconnect()
         onDataDisposable.dispose()
@@ -649,12 +663,12 @@ export function TerminalView({
           if (cancelled) return null
           if (snapshot && accept(snapshot)) return snapshot
           if (!retryMissing) return snapshot
-          if (snapshot) lastAnswer = snapshot
+          lastAnswer = snapshot
           await new Promise((resolve) => setTimeout(resolve, 150))
         } while (!cancelled && Date.now() < deadline)
-        // Out of time: the backend's last word, so a session it reported
-        // missing all along counts as gone, while one only ever unreachable
-        // stays unconfirmed.
+        // Out of time: the last probe's answer. A session the backend still
+        // reports missing counts as gone; one the last probe could not reach
+        // stays unconfirmed, as an earlier "missing" may be out of date.
         return cancelled ? null : lastAnswer
       }
 
@@ -792,6 +806,7 @@ export function TerminalView({
         termRef.current = null
         ligaturesAddonRef.current = null
         lastResizeRef.current = null
+        if (replayGateRef.current === replays) replayGateRef.current = null
       }
     }
 
@@ -812,7 +827,12 @@ export function TerminalView({
     if (isActive && isVisible) {
       requestAnimationFrame(() => {
         const el = containerRef.current
-        if (el && el.clientWidth > 0 && el.clientHeight > 0) {
+        if (
+          el &&
+          el.clientWidth > 0 &&
+          el.clientHeight > 0 &&
+          !replayGateRef.current?.pending
+        ) {
           fitAddonRef.current?.fit()
         }
         termRef.current?.focus()
@@ -835,7 +855,12 @@ export function TerminalView({
     requestAnimationFrame(() => {
       requestAnimationFrame(() => {
         const el = containerRef.current
-        if (el && el.clientWidth > 0 && el.clientHeight > 0) {
+        if (
+          el &&
+          el.clientWidth > 0 &&
+          el.clientHeight > 0 &&
+          !replayGateRef.current?.pending
+        ) {
           fitAddonRef.current?.fit()
         }
       })
