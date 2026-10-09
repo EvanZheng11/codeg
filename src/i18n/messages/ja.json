@@ -4763,6 +4763,8 @@
     }
   },
   "RemoteWorkspace": {
+    "openLocalWorkspace": "ローカルワークスペースを開く",
+    "openLocalFailed": "ローカルワークスペースを開けませんでした",
     "openRemoteWorkspace": "Open remote workspace",
     "manage": "Manage remote workspace",
     "manageTitle": "Remote Workspace connections",

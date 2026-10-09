@@ -4783,6 +4783,8 @@
     }
   },
   "RemoteWorkspace": {
+    "openLocalWorkspace": "Open local workspace",
+    "openLocalFailed": "Failed to open local workspace",
     "openRemoteWorkspace": "Open remote workspace",
     "manage": "Manage remote workspace",
     "manageTitle": "Remote Workspace connections",

@@ -2340,11 +2340,22 @@ fn wait_for_macos_fullscreen_space_release(window: &tauri::WebviewWindow) {
 
 /// Bring the hidden / minimized main workspace window back to the
 /// foreground. Used by:
+///   * "Open Local Workspace" (the macOS Window menu, `open_local_workspace`)
 ///   * tray icon left-click and "Show Workspace" menu item
 ///   * explicit local-workspace and deep-link actions
 #[cfg(feature = "tauri-runtime")]
 pub fn show_main_window(app: &AppHandle) {
     show_and_focus_window(app, "main");
+}
+
+/// The frontend's "Open local workspace": Quick actions in a remote workspace
+/// window, and the screens a remote window shows instead of its workspace
+/// when its connection cannot be used. Reached through the shell transport, so
+/// it needs nothing from the remote server.
+#[cfg(feature = "tauri-runtime")]
+#[tauri::command]
+pub fn open_local_workspace(app: AppHandle) {
+    show_main_window(&app);
 }
 
 #[cfg(feature = "tauri-runtime")]

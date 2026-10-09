@@ -20,6 +20,7 @@ vi.mock("@/lib/transport", () => ({
   configureRemoteDesktopTransport: mocks.configure,
   clearRemoteDesktopTransport: mocks.clear,
   getTransport: () => mocks.transport,
+  isDesktop: () => true,
 }))
 vi.mock("@/lib/remote-workspace", () => ({
   getRemoteWorkspaceConnection: mocks.readConnection,

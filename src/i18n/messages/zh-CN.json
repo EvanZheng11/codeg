@@ -4783,6 +4783,8 @@
     }
   },
   "RemoteWorkspace": {
+    "openLocalWorkspace": "打开本地工作区",
+    "openLocalFailed": "打开本地工作区失败",
     "openRemoteWorkspace": "打开远端工作区",
     "manage": "管理远端工作区",
     "manageTitle": "远端工作区连接",

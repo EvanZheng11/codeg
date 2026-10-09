@@ -4763,6 +4763,8 @@
     }
   },
   "RemoteWorkspace": {
+    "openLocalWorkspace": "فتح مساحة العمل المحلية",
+    "openLocalFailed": "تعذر فتح مساحة العمل المحلية",
     "openRemoteWorkspace": "Open remote workspace",
     "manage": "Manage remote workspace",
     "manageTitle": "Remote Workspace connections",
