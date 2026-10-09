@@ -28,7 +28,7 @@ const WS_UNAUTHORIZED_CHANNEL = "__unauthorized__"
 //      firehose (`__ready__`, folder/app channels, etc.).
 //   2. Top-level attach-protocol frames `{type, ...}` from the per-connection
 //      WS attach forwarders (`ServerMsg` in `web/ws_attach.rs`).
-// `forward_text_message` in the Rust proxy passes the parsed JSON through
+// `forward_frame` in the Rust proxy passes the parsed JSON through
 // without re-shaping, so the handler must discriminate on which top-level
 // field is present. Using `unknown` here forces that discrimination at the
 // call site rather than silently destructuring `undefined`.
@@ -94,8 +94,11 @@ export class RemoteDesktopTransport implements Transport {
   /// Tracks whether `__ready__` has arrived since this transport was
   /// constructed. The first arrival is the initial connect; subsequent
   /// arrivals are reconnects (after `__disconnected__` reset the promise).
-  /// Reconnect callbacks fire only on subsequent arrivals.
+  /// A first ready after a failed initial load also triggers state resync.
   private hasReadiedOnce = false
+  // Initial loads can fail while a restored remote is offline. Its first
+  // eventual ready must refetch that state too, even without an earlier ready.
+  private needsResync = false
   private reconnectCallbacks = new Set<() => void>()
   /// Listener handle for `remote-ws-event-{id}`. Null when not subscribed.
   private unlistenWsEvent: UnlistenFn | null = null
@@ -153,6 +156,7 @@ export class RemoteDesktopTransport implements Transport {
     ])
     if (timeoutId !== undefined) clearTimeout(timeoutId)
     if (result === "timeout") {
+      this.needsResync = true
       console.warn(
         `[RemoteDesktopTransport] WS __ready__ frame did not arrive within ${READY_TIMEOUT_MS}ms; ` +
           "proceeding without server-side subscribe confirmation (initial-connect race may reopen)."
@@ -298,10 +302,16 @@ export class RemoteDesktopTransport implements Transport {
     this.wsStarted = true
 
     try {
-      this.unlistenWsEvent = await listen<WsFrame>(
+      const unlisten = await listen<WsFrame>(
         `remote-ws-event-${this.config.id}`,
         (event) => this.handleWsEvent(event.payload)
       )
+      if (this.destroyed) {
+        unlisten()
+        this.wsStarted = false
+        return
+      }
+      this.unlistenWsEvent = unlisten
     } catch (err) {
       this.wsStarted = false
       throw err
@@ -349,6 +359,12 @@ export class RemoteDesktopTransport implements Transport {
     if (typeof channel !== "string") return
 
     if (channel === WS_READY_CHANNEL) {
+      // Rust may acknowledge another subscription in the same webview while
+      // the shared socket is already ready. This is not another reconnect.
+      if (this.wsOpen) return
+      const resync = this.hasReadiedOnce || this.needsResync
+      this.hasReadiedOnce = true
+      this.needsResync = false
       this.wsOpen = true
       this.readyResolve()
       // Notify EventStream so it can re-issue attach frames for any
@@ -360,7 +376,7 @@ export class RemoteDesktopTransport implements Transport {
           console.error("[RemoteDesktopTransport] wsReady callback threw:", err)
         }
       }
-      if (this.hasReadiedOnce) {
+      if (resync) {
         // Reconnect path: server-side receiver_count was 0 during the
         // disconnect window, so any event fired in that gap was dropped.
         // Notify consumers to recover state (e.g. refetch snapshots).
@@ -375,21 +391,20 @@ export class RemoteDesktopTransport implements Transport {
             )
           }
         }
-      } else {
-        this.hasReadiedOnce = true
       }
       return
     }
     if (channel === WS_DISCONNECTED_CHANNEL) {
+      this.needsResync = true
+      // Repeated failed handshakes share the same waiters. Replacing their
+      // promise again would strand them until the readiness timeout.
+      if (this.wsOpen) this.resetReady()
       this.wsOpen = false
-      // New subscribers (and any concurrent subscribe() calls in flight)
-      // must wait for the next `__ready__` before resolving.
-      this.resetReady()
       return
     }
     if (channel === WS_UNAUTHORIZED_CHANNEL) {
-      // Rust gave up after WS_RECONNECT_FAIL_THRESHOLD failures, OR the
-      // remote rejected the handshake. Either way, surface as expired.
+      this.wsOpen = false
+      // Only a definitive authentication rejection ends Rust's retries.
       this.config.onUnauthorized?.()
       return
     }
@@ -402,6 +417,7 @@ export class RemoteDesktopTransport implements Transport {
   }
 
   destroy() {
+    if (this.destroyed) return
     this.destroyed = true
     this.wsOpen = false
     if (this.sendFailRetryTimer !== null) {

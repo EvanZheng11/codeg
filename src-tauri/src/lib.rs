@@ -1375,9 +1375,9 @@ mod tauri_app {
                 // `list_open_folder_details` / `list_opened_tabs` inside it. It
                 // starts hidden only when it was hidden to the tray at quit and
                 // other workspace windows are coming back in its place; the
-                // tray, a second launch and a `codeg://` link still bring it
-                // up, and so does the Dock once no other workspace is open or
-                // on its way back.
+                // tray, a `codeg://` link and the other explicit local-workspace
+                // actions still bring it up, and so do the Dock and a second
+                // launch once no other workspace is open or on its way back.
                 if app.get_webview_window("main").is_none() {
                     let url = tauri::WebviewUrl::App(workspace_path.into());
                     let builder = tauri::WebviewWindowBuilder::new(app, "main", url)
@@ -1566,8 +1566,9 @@ mod tauri_app {
                         //     aux windows in a process with no workspace and
                         //     no way to bring it back — `pet` runs with
                         //     `skip_taskbar(true)`, and the single-instance
-                        //     callback's `show_main_window` is a no-op once
-                        //     main is destroyed. So the choice folds to Exit,
+                        //     callback's activation can only raise windows
+                        //     that still exist; nothing rebuilds a destroyed
+                        //     main. So the choice folds to Exit,
                         //     rather than exiting right here: folding keeps
                         //     the running-terminal confirmation below on the
                         //     path for this platform too.
@@ -1763,6 +1764,7 @@ mod tauri_app {
                 workspace_state_commands::get_workspace_snapshot,
                 folders::get_home_directory,
                 folders::list_directory_entries,
+                crate::commands::create_directory::create_directory,
                 folders::list_directory_with_files,
                 folders::get_file_tree,
                 folders::list_workspace_files,
@@ -2202,7 +2204,7 @@ mod tauri_app {
                     // Every Dock click, whatever `has_visible_windows` says:
                     // it is true whenever an auxiliary window (pet, settings,
                     // commit…) is up, even with every workspace hidden or
-                    // minimized.
+                    // minimized. Raise the last-used local/remote workspace.
                     workspace_windows::activate_workspace(app);
                 }
                 _ => {}
