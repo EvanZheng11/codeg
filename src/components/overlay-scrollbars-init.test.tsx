@@ -19,17 +19,27 @@ const idle = new Map<number, () => void>()
 const frames = new Map<number, FrameRequestCallback>()
 let nextHandle = 0
 
-function flushDeferred() {
+function flushIdle() {
   act(() => {
     for (const [handle, callback] of [...idle]) {
       idle.delete(handle)
       callback()
     }
+  })
+}
+
+function flushFrames() {
+  act(() => {
     for (const [handle, callback] of [...frames]) {
       frames.delete(handle)
       callback(0)
     }
   })
+}
+
+function flushDeferred() {
+  flushIdle()
+  flushFrames()
 }
 
 // The static getter: the body's live instance, or undefined. Never creates.
@@ -103,5 +113,28 @@ describe("OverlayScrollbarsInit", () => {
     flushDeferred()
 
     expect(bodyInstance()).toBeUndefined()
+  })
+
+  it("cancels an init already waiting for its frame, as in a hidden tab", () => {
+    const { rerender } = render(<OverlayScrollbarsInit />)
+    flushIdle()
+    expect(frames.size).toBeGreaterThan(0)
+
+    navigate(rerender, "/workspace")
+    flushFrames()
+
+    expect(bodyInstance()).toBeUndefined()
+  })
+
+  it("keeps the same instance across pages that scroll", () => {
+    nav.pathname = "/settings/appearance"
+    const { rerender } = render(<OverlayScrollbarsInit />)
+    flushDeferred()
+    const instance = bodyInstance()
+    expect(instance).toBeDefined()
+
+    navigate(rerender, "/settings/general")
+
+    expect(bodyInstance()).toBe(instance)
   })
 })
