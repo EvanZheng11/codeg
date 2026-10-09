@@ -32,10 +32,15 @@ jobs:
         name: Resolve release channel
         shell: bash
         run: |
-          if [[ "${GITHUB_REF_NAME}" == *"-rc"* ]]; then
+          VERSION="${GITHUB_REF_NAME#v}"
+          # 构建元数据中的连字符不代表预发布，先移除元数据再判断。
+          VERSION="${VERSION%%+*}"
+          if [[ "$VERSION" == *-* ]]; then
             echo "prerelease=true" >> "$GITHUB_OUTPUT"
+            echo "发布通道：预发布（${GITHUB_REF_NAME}）"
           else
             echo "prerelease=false" >> "$GITHUB_OUTPUT"
+            echo "发布通道：正式发布（${GITHUB_REF_NAME}）"
           fi
 
       - name: Check tag commit belongs to default branch
