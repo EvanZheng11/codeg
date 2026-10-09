@@ -1375,7 +1375,7 @@ mod tauri_app {
                 // `list_open_folder_details` / `list_opened_tabs` inside it. It
                 // starts hidden only when it was hidden to the tray at quit and
                 // other workspace windows are coming back in its place; the
-                // tray, the dock and a second launch still bring it up.
+                // tray and explicit local-workspace actions still bring it up.
                 if app.get_webview_window("main").is_none() {
                     let url = tauri::WebviewUrl::App(workspace_path.into());
                     let builder = tauri::WebviewWindowBuilder::new(app, "main", url)
@@ -1564,8 +1564,9 @@ mod tauri_app {
                         //     aux windows in a process with no workspace and
                         //     no way to bring it back — `pet` runs with
                         //     `skip_taskbar(true)`, and the single-instance
-                        //     callback's `show_main_window` is a no-op once
-                        //     main is destroyed. So the choice folds to Exit,
+                        //     callback's activation can only raise windows
+                        //     that still exist; nothing rebuilds a destroyed
+                        //     main. So the choice folds to Exit,
                         //     rather than exiting right here: folding keeps
                         //     the running-terminal confirmation below on the
                         //     path for this platform too.
@@ -2198,15 +2199,9 @@ mod tauri_app {
                 tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => shut_down(app),
                 #[cfg(target_os = "macos")]
                 tauri::RunEvent::Reopen { .. } => {
-                    // Dock-icon click: bring the workspace forward
-                    // unconditionally. `has_visible_windows` is true
-                    // whenever any aux window (pet, settings, commit…)
-                    // is alive, so gating on it would suppress recovery
-                    // even though `main` itself is hidden.
-                    // `show_main_window` is idempotent — already-visible
-                    // windows just get re-focused, which is what dock
-                    // activation should do anyway.
-                    windows::show_main_window(app);
+                    // Auxiliary windows do not determine which workspace is
+                    // active. Restore the last local/remote workspace instead.
+                    workspace_windows::activate_workspace(app);
                 }
                 _ => {}
             });
