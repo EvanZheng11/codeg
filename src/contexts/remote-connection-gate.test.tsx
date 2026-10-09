@@ -65,8 +65,8 @@ async function renderGate() {
 }
 
 describe("RemoteConnectionGate failure recovery", () => {
-  // A socket that merely ran out of retries never reaches the gate: the
-  // transport keeps that to its own state, which the status pill shows.
+  // A socket that is merely down never reaches the gate: the transport
+  // keeps retrying it in its own state, which the status pill shows.
   it("shows credential expiry once the transport reports a refused token", async () => {
     const config = await renderGate()
     expect(screen.queryByText(/expired/i)).not.toBeInTheDocument()

@@ -15,8 +15,9 @@ type ConnectionHealth = Pick<
 >
 
 /** Mounted after the remote transport is configured, so it cannot subscribe
- * to the local shell by mistake. Keep the workspace mounted during an outage
- * and show a manual recovery action once the proxy has stopped retrying. */
+ * to the local shell by mistake. Keep the workspace mounted during an outage,
+ * which the proxy keeps retrying, and show a manual recovery action once this
+ * window's subscription to it has stopped. */
 export function RemoteConnectionStatus({
   transport,
 }: {
@@ -35,7 +36,7 @@ export function RemoteConnectionStatus({
   const [graceElapsed, setGraceElapsed] = useState(false)
   // A retry the user just asked for shows its progress at once: the pill is
   // already up, and hiding it for the grace window reads as "nothing
-  // happened" (a server that still refuses gives up within seconds).
+  // happened".
   const [retryRequested, setRetryRequested] = useState(false)
 
   useEffect(() => {

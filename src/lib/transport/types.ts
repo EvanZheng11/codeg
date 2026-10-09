@@ -10,8 +10,8 @@ export interface RemoteTransportConfig {
   windowInstanceId: string
   /**
    * The remote server refused the connection's token: a 401 on an HTTP call
-   * or on the event socket's handshake. A socket that merely stopped
-   * retrying after network failures does not call this.
+   * or on the event socket's handshake. Network failures never call this:
+   * the event socket keeps retrying them.
    */
   onUnauthorized?: () => void
 }

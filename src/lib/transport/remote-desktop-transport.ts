@@ -23,16 +23,13 @@ const READY_TIMEOUT_MS = 5_000
 const WS_DISCONNECTED_CHANNEL = "__disconnected__"
 /// The server refused the token on the socket's handshake (HTTP 401).
 const WS_UNAUTHORIZED_CHANNEL = "__unauthorized__"
-/// The proxy stopped retrying after repeated failures that said nothing
-/// about the token. Recoverable with `reconnectNow()`.
-const WS_RETRIES_EXHAUSTED_CHANNEL = "__retries_exhausted__"
 
 // Two wire shapes flow on the same `remote-ws-event-{id}` Tauri event:
 //   1. Legacy `{channel, payload}` envelopes from the WebEventBroadcaster
 //      firehose (`__ready__`, folder/app channels, etc.).
 //   2. Top-level attach-protocol frames `{type, ...}` from the per-connection
 //      WS attach forwarders (`ServerMsg` in `web/ws_attach.rs`).
-// `forward_text_message` in the Rust proxy passes the parsed JSON through
+// `forward_frame` in the Rust proxy passes the parsed JSON through
 // without re-shaping, so the handler must discriminate on which top-level
 // field is present. Using `unknown` here forces that discrimination at the
 // call site rather than silently destructuring `undefined`.
@@ -106,6 +103,8 @@ export class RemoteDesktopTransport implements Transport {
   /// A clean initial connect needs no refetch, but one preceded by failed
   /// startup reads must refresh the workspace on its first ready too.
   private hasReadiedOnce = false
+  // Initial loads can fail while a restored remote is offline. Its first
+  // eventual ready must refetch that state too, even without an earlier ready.
   private recoveryNeeded = false
   private recoveryTimer: ReturnType<typeof setTimeout> | null = null
   private resubscribing = false
@@ -168,6 +167,7 @@ export class RemoteDesktopTransport implements Transport {
     ])
     if (timeoutId !== undefined) clearTimeout(timeoutId)
     if (result === "timeout") {
+      this.recoveryNeeded = true
       console.warn(
         `[RemoteDesktopTransport] WS __ready__ frame did not arrive within ${READY_TIMEOUT_MS}ms; ` +
           "proceeding without server-side subscribe confirmation (initial-connect race may reopen)."
@@ -410,16 +410,16 @@ export class RemoteDesktopTransport implements Transport {
   private async startWs() {
     this.wsStarted = true
     try {
-      this.unlistenWsEvent = await listen<WsFrame>(
+      const unlisten = await listen<WsFrame>(
         `remote-ws-event-${this.config.id}`,
         (event) => this.handleWsEvent(event.payload)
       )
       if (this.destroyed) {
-        this.unlistenWsEvent()
-        this.unlistenWsEvent = null
+        unlisten()
         this.wsStarted = false
         return
       }
+      this.unlistenWsEvent = unlisten
     } catch (err) {
       this.wsStarted = false
       this.recoveryNeeded = true
@@ -475,6 +475,9 @@ export class RemoteDesktopTransport implements Transport {
     if (typeof channel !== "string") return
 
     if (channel === WS_READY_CHANNEL) {
+      // Rust may acknowledge another subscription in the same webview while
+      // the shared socket is already ready. This is not another reconnect.
+      if (this.wsOpen) return
       const shouldRefresh = this.hasReadiedOnce || this.recoveryNeeded
       this.hasReadiedOnce = true
       this.wsOpen = true
@@ -501,29 +504,21 @@ export class RemoteDesktopTransport implements Transport {
     if (channel === WS_DISCONNECTED_CHANNEL) {
       this.recoveryNeeded = true
       this.setConnectionState("reconnecting")
-      // Failed reconnect attempts can each report a disconnect. Keep the
-      // same pending promise until ready arrives, otherwise subscribers
-      // awaiting an earlier attempt remain stuck until their timeout.
-      if (!this.wsOpen) return
+      // Repeated failed handshakes share the same waiters. Replacing their
+      // promise again would strand them until the readiness timeout.
+      if (this.wsOpen) this.resetReady()
       this.wsOpen = false
-      // New subscribers (and any concurrent subscribe() calls in flight)
-      // must wait for the next `__ready__` before resolving.
-      this.resetReady()
       return
     }
-    if (
-      channel === WS_RETRIES_EXHAUSTED_CHANNEL ||
-      channel === WS_UNAUTHORIZED_CHANNEL
-    ) {
-      // The proxy has stopped and dropped this window's subscription:
-      // either it gave up after network failures, which the user may retry
-      // in place, or the server refused the token, which is the same
-      // expiry an HTTP 401 reports.
+    if (channel === WS_UNAUTHORIZED_CHANNEL) {
+      // Only a definitive authentication rejection ends Rust's retries, and
+      // it drops this window's subscription: the same expiry an HTTP 401
+      // reports.
       this.recoveryNeeded = true
       if (this.wsOpen) this.resetReady()
       this.wsOpen = false
       this.setConnectionState("disconnected")
-      if (channel === WS_UNAUTHORIZED_CHANNEL) this.config.onUnauthorized?.()
+      this.config.onUnauthorized?.()
       return
     }
     const handlers = this.handlers.get(channel)
@@ -535,6 +530,7 @@ export class RemoteDesktopTransport implements Transport {
   }
 
   destroy() {
+    if (this.destroyed) return
     this.destroyed = true
     this.wsOpen = false
     if (this.recoveryTimer !== null) {

@@ -2977,10 +2977,13 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // interrupted `hermes update` in the standalone `hermes-acp` entry,
             // a no-op under the `hermes acp` codeg launches.
             //
-            // Launch preference: `resolve_npx_command("hermes")` checks PATH
-            // first, so an official-installer `hermes` (which self-updates)
-            // naturally outranks the npm-managed copy; the npm global install
-            // is the managed/one-click channel codeg's Install button drives.
+            // Launch preference: `resolve_npx_command("hermes")` checks PATH,
+            // then `~/.local/bin` (the official installer's target), then the
+            // npm global prefix. Whatever is on the app's PATH wins first; past
+            // that, an official-installer `hermes` (which self-updates)
+            // outranks the npm-managed copy even when the app's PATH lacks
+            // `~/.local/bin`. The npm global install is the managed/one-click
+            // channel codeg's Install button drives.
             distribution: AgentDistribution::Npx {
                 version: "0.21.5",
                 package: "hermes-agent@0.21.5",
@@ -4234,8 +4237,9 @@ mod tests {
     // `acp` subcommand — the package's OTHER bins (`hermes-agent`,
     // `hermes-npm`) map to different console scripts (`run_agent:main` and
     // the bridge maintenance CLI), not the ACP adapter. `resolve_npx_command`
-    // checks PATH before the npm prefix, so an official-installer `hermes`
-    // keeps outranking the npm-managed copy without any policy bit.
+    // checks PATH and `~/.local/bin` before the npm prefix, so an
+    // official-installer `hermes` keeps outranking the npm-managed copy
+    // without any policy bit.
     #[test]
     fn hermes_launches_the_hermes_bin_with_acp_subcommand() {
         let meta = get_agent_meta(AgentType::Hermes);
