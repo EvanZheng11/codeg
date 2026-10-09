@@ -230,9 +230,10 @@ mod tests {
     const HELP_1_18_33: &str = "opencode acp\n\nstart ACP (Agent Client Protocol) server\n\nOptions:\n  -h, --help         show help  [boolean]\n      --port         port to listen on  [number] [default: 0]\n      --hostname     hostname to listen on  [string] [default: \"127.0.0.1\"]\n      --mdns         enable mDNS service discovery (defaults hostname to 0.0.0.0)\n      --cwd          working directory  [string]\n";
     const HELP_1_0_41: &str = "opencode acp\n\nStart ACP (Agent Client Protocol) server\n\nOptions:\n  -h, --help        show help  [boolean]\n      --print-logs  print logs to stderr  [boolean]\n      --cwd         working directory  [string]\n";
 
-    /// `opencode acp --help` from 2.0.24, trimmed to the options. opencode 2.x
-    /// declares no command options for `acp` — only the CLI's global flags.
-    const HELP_2_0_24: &str = "opencode acp\n\nDESCRIPTION\n  Start an Agent Client Protocol server\n\nUSAGE\n  opencode acp [flags]\n\nGLOBAL FLAGS\n  --help, -h        Show help information\n  --version, -v     Show version information\n  --print-logs      Print logs to stderr (server logs require --standalone)\n";
+    /// `opencode acp --help` from 2.0.24, verbatim; 2.x prints it on stdout.
+    /// Its `acp` declares no options of its own — every flag listed is one of
+    /// the CLI's global flags.
+    const HELP_2_0_24: &str = "DESCRIPTION\n  Start an Agent Client Protocol server\n\nUSAGE\n  opencode acp [flags]\n\nGLOBAL FLAGS\n  --help, -h                                                          Show help information\n  --version, -v                                                       Show version information\n  --wizard                                                            Start wizard mode for a command\n  --completions <bash|zsh|fish|sh>                                    Print shell completion script (choices: bash, zsh, fish, sh)\n  --log-level <all|trace|debug|info|warn|warning|error|fatal|none>    Sets the minimum log level (choices: all, trace, debug, info, warn, warning, error, fatal, none)\n  --print-logs                                                        Print logs to stderr (server logs require --standalone)\n";
 
     #[test]
     fn help_needs_both_flags_as_whole_tokens() {
@@ -283,14 +284,28 @@ mod tests {
     }
 
     /// A stand-in `opencode`: answers `--version` with `version` (or fails
-    /// when `None`), and `acp --help` with `help` on stderr and exit status
-    /// `acp_status`. Every call is logged; see [`invocations`].
+    /// when `None`), and `acp --help` with `help` on stderr — where 1.18
+    /// prints it — and exit status `acp_status`. Every call is logged; see
+    /// [`invocations`].
     #[cfg(unix)]
     async fn fake_opencode(
         dir: &Path,
         version: Option<&str>,
         help: &str,
         acp_status: u8,
+    ) -> PathBuf {
+        fake_opencode_with_help_on(dir, version, help, acp_status, 2).await
+    }
+
+    /// [`fake_opencode`], printing its `acp --help` on file descriptor
+    /// `help_fd` instead: 1 for a 2.x stand-in, since 2.x prints it on stdout.
+    #[cfg(unix)]
+    async fn fake_opencode_with_help_on(
+        dir: &Path,
+        version: Option<&str>,
+        help: &str,
+        acp_status: u8,
+        help_fd: u8,
     ) -> PathBuf {
         use std::os::unix::fs::PermissionsExt;
 
@@ -304,7 +319,7 @@ mod tests {
              if [ \"$1\" = \"--noop\" ]; then exit 1; fi\n\
              echo \"$1\" >> '{}'\n\
              if [ \"$1\" = \"--version\" ]; then {version_arm}; fi\n\
-             if [ \"$1\" = \"acp\" ]; then printf '%s' '{help}' >&2; exit {acp_status}; fi\n\
+             if [ \"$1\" = \"acp\" ]; then printf '%s' '{help}' >&{help_fd}; exit {acp_status}; fi\n\
              exit 1\n",
             dir.join("invocations").display()
         );
@@ -390,12 +405,35 @@ mod tests {
         // The codeg#860 floor must not leak into opencode 2.x: 2.0.24 rejects
         // the listen flags outright (the CLI exits and prints its usage to
         // stdout — the ACP channel), so the bare argv is the only launch that
-        // starts. The binary is asked (`--version`, then `acp --help`) and its
-        // answer — no flags — is what keeps that launch.
+        // starts. The binary is asked (`--version`, whose real banner reads as
+        // 2.0.24, then `acp --help`) and its answer — no flags — is what keeps
+        // that launch.
         let dir = tempfile::tempdir().expect("tempdir");
-        let bin = fake_opencode(dir.path(), Some("2.0.24"), HELP_2_0_24, 0).await;
+        let bin =
+            fake_opencode_with_help_on(dir.path(), Some("opencode v2.0.24"), HELP_2_0_24, 0, 1)
+                .await;
         assert!(listen_args(&bin, None).await.is_empty());
         assert_eq!(invocations(dir.path()), ["--version", "acp"]);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_2x_label_is_answered_by_its_help_both_ways() {
+        // A managed install's 2.x label settles nothing on its own either: the
+        // binary is asked for `acp --help` straight away (its `--version` is
+        // not needed) ...
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bin = fake_opencode_with_help_on(dir.path(), None, HELP_2_0_24, 0, 1).await;
+        assert!(listen_args(&bin, Some("2.0.24")).await.is_empty());
+        assert_eq!(invocations(dir.path()), ["acp"]);
+
+        // ... and a later 2.x whose help declares both flags again launches
+        // with them, read from stdout, where 2.x prints its help. (1.18.33's
+        // option list stands in for that help.)
+        let dir = tempfile::tempdir().expect("tempdir");
+        let bin = fake_opencode_with_help_on(dir.path(), None, HELP_1_18_33, 0, 1).await;
+        assert_eq!(listen_args(&bin, Some("2.1.0")).await, LISTEN_ARGS);
+        assert_eq!(invocations(dir.path()), ["acp"]);
     }
 
     #[cfg(unix)]
