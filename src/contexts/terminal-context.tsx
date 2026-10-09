@@ -11,7 +11,11 @@ import {
   useState,
   type ReactNode,
 } from "react"
-import { getSystemTerminalSettings, terminalKill } from "@/lib/api"
+import {
+  getSystemTerminalSettings,
+  terminalKill,
+  terminalSnapshot,
+} from "@/lib/api"
 import { getActiveRemoteConnectionId, getTransport } from "@/lib/transport"
 import { randomUUID } from "@/lib/utils"
 import { getCurrentWindowLabel } from "@/lib/browser/window-label"
@@ -40,7 +44,9 @@ const TERMINAL_SETTINGS_UPDATED_EVENT = "app://terminal-settings-updated"
 const TERMINAL_SESSION_KEY = "codeg:terminal-session:v1"
 const PAGE_NAME_PREFIX = "codeg-terminal-page:"
 const MAX_STORED_TITLE_LENGTH = 256
-const DEFAULT_TITLE = /^Terminal (\d+)$/
+// Up to 15 digits: counting on from any of them stays exact for as many tabs
+// as a page will ever open, so no default title can come out twice.
+const DEFAULT_TITLE = /^Terminal (\d{1,15})$/
 const UUID_V4 =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
@@ -64,6 +70,8 @@ interface StoredTerminalSession {
  * Whether one stored tab may come back. Judged per tab, so an entry the reader
  * rejects costs that tab alone rather than every other tab's way back to its
  * PTY — and every bound here must admit whatever the writer below persists.
+ * `workingDir` and `shell` only ever launch a tab's first process, and a
+ * restored tab never launches one, so any string the writer kept will do.
  */
 function isRestorableTab(tab: unknown): tab is StoredTerminalTab {
   if (typeof tab !== "object" || tab === null) return false
@@ -81,10 +89,7 @@ function isRestorableTab(tab: unknown): tab is StoredTerminalTab {
     // Any length: it is only a label, clamped on the way in and out.
     typeof title === "string" &&
     typeof workingDir === "string" &&
-    workingDir.length > 0 &&
-    workingDir.length <= 4096 &&
-    /^(\/|[A-Za-z]:[\\/]|\\\\)/.test(workingDir) &&
-    (shell === undefined || (typeof shell === "string" && shell.length <= 512))
+    (shell === undefined || typeof shell === "string")
   )
 }
 
@@ -99,7 +104,7 @@ function restoredTabCounter(tabs: TerminalTab[]): number {
   let counter = tabs.length
   for (const { title } of tabs) {
     const n = Number(DEFAULT_TITLE.exec(title)?.[1])
-    if (Number.isSafeInteger(n)) counter = Math.max(counter, n)
+    if (n) counter = Math.max(counter, n)
   }
   return counter
 }
@@ -264,16 +269,6 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
     }
   }, [restoredSession, isOpen, activeTabId, tabs])
 
-  // The launcher's command↔terminal links live in memory. Rebuilt from the
-  // restored tabs, a command still running in one reads as running, rather
-  // than offering to start a second copy beside it.
-  useEffect(() => {
-    const { setLink } = useCommandTerminalLinkStore.getState()
-    for (const tab of restoredSession.tabs) {
-      if (tab.commandId !== undefined) setLink(tab.commandId, tab.id)
-    }
-  }, [restoredSession])
-
   const folderPath = activeFolder?.path ?? ""
   const currentFolderId = activeFolderId ?? 0
   const resolveTerminalShell = useCallback(
@@ -342,6 +337,61 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
       return next
     })
   }, [])
+
+  // The launcher's command↔terminal links live in memory. Rebuilt from the
+  // restored tabs, a command still running in one reads as running, rather
+  // than offering to start a second copy beside it.
+  useEffect(() => {
+    const { setLink } = useCommandTerminalLinkStore.getState()
+    for (const tab of restoredSession.tabs) {
+      if (tab.commandId !== undefined) setLink(tab.commandId, tab.id)
+    }
+  }, [restoredSession])
+
+  // A tab's view reports its exit, but views unmount (a closed mobile drawer)
+  // and a reload never hears an exit from before it. The launcher tells a
+  // running command from an ended one by `exitedTerminals`, so command tabs
+  // are watched here, mounted or not.
+  const uncheckedRestoredRef = useRef(
+    new Set(
+      restoredSession.tabs
+        .filter((tab) => tab.commandId !== undefined)
+        .map((tab) => tab.id)
+    )
+  )
+  const commandTabIds = tabs
+    .filter((tab) => tab.commandId !== undefined)
+    .map((tab) => tab.id)
+    .join(" ")
+  useEffect(() => {
+    if (!commandTabIds) return
+    const unchecked = uncheckedRestoredRef.current
+    let disposed = false
+    const unlisteners: (() => void)[] = []
+    for (const id of commandTabIds.split(" ")) {
+      getTransport()
+        .subscribe(`terminal://exit/${id}`, () => {
+          if (!disposed) markTerminalExited(id)
+        })
+        .then(async (unlisten) => {
+          if (disposed) return unlisten()
+          unlisteners.push(unlisten)
+          // Asked only once listening, so an end in between is heard anyway.
+          // A missing one is left to its view, which waits out a launch the
+          // reload may have overtaken.
+          if (!unchecked.has(id)) return
+          const snapshot = await terminalSnapshot(id)
+          if (disposed) return
+          unchecked.delete(id)
+          if (snapshot.exists && !snapshot.alive) markTerminalExited(id)
+        })
+        .catch(() => {})
+    }
+    return () => {
+      disposed = true
+      for (const unlisten of unlisteners) unlisten()
+    }
+  }, [commandTabIds, markTerminalExited])
 
   const removeExitedTerminals = useCallback((ids: string[]) => {
     setExitedTerminals((prev) => {

@@ -1,10 +1,15 @@
-import { fireEvent, render, screen } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { TerminalProvider, useTerminalContext } from "./terminal-context"
 import { useCommandTerminalLinkStore } from "@/stores/command-terminal-link-store"
 
 const h = vi.hoisted(() => ({
   terminalKill: vi.fn(async () => {}),
+  terminalSnapshot: vi.fn(),
+  listeners: new Map<string, () => void>(),
+  // While set, exit subscriptions wait to be granted (see `grant`).
+  holdSubscribe: false,
+  grants: [] as (() => void)[],
   remoteId: null as number | null,
   windowLabel: "main",
   activeFolderId: 7 as number | null,
@@ -13,9 +18,23 @@ const h = vi.hoisted(() => ({
 vi.mock("@/lib/api", () => ({
   getSystemTerminalSettings: vi.fn(async () => ({ default_shell: null })),
   terminalKill: h.terminalKill,
+  terminalSnapshot: h.terminalSnapshot,
 }))
 vi.mock("@/lib/transport", () => ({
-  getTransport: () => ({ subscribe: async () => () => {} }),
+  getTransport: () => ({
+    subscribe: (event: string, handler: () => void) => {
+      h.listeners.set(event, handler)
+      const unlisten = () => {
+        h.listeners.delete(event)
+      }
+      if (!h.holdSubscribe || !event.startsWith("terminal://exit/")) {
+        return Promise.resolve(unlisten)
+      }
+      return new Promise<() => void>((resolve) => {
+        h.grants.push(() => resolve(unlisten))
+      })
+    },
+  }),
   getActiveRemoteConnectionId: () => h.remoteId,
 }))
 vi.mock("@/lib/browser/window-label", () => ({
@@ -89,6 +108,17 @@ function Probe() {
       >
         Rename long
       </button>
+      <button
+        onClick={() =>
+          terminal.activeTabId &&
+          terminal.renameTerminal(
+            terminal.activeTabId,
+            `Terminal ${Number.MAX_SAFE_INTEGER}`
+          )
+        }
+      >
+        Rename huge
+      </button>
       <span data-testid="tabs">{terminal.tabs.length}</span>
       <span data-testid="titles">
         {terminal.tabs.map((tab) => tab.title.length).join(",")}
@@ -100,6 +130,9 @@ function Probe() {
       <span data-testid="command">
         {terminal.tabs[0]?.initialCommand ?? ""}
       </span>
+      <span data-testid="exited">
+        {[...terminal.exitedTerminals].join(",")}
+      </span>
     </div>
   )
 }
@@ -107,6 +140,16 @@ function Probe() {
 describe("TerminalProvider reload recovery", () => {
   beforeEach(() => {
     h.terminalKill.mockClear()
+    h.terminalSnapshot.mockReset()
+    h.terminalSnapshot.mockResolvedValue({
+      exists: false,
+      alive: false,
+      data: "",
+      seq: 0,
+    })
+    h.listeners.clear()
+    h.holdSubscribe = false
+    h.grants.length = 0
     h.remoteId = null
     h.windowLabel = "main"
     h.activeFolderId = 7
@@ -432,5 +475,175 @@ describe("TerminalProvider reload recovery", () => {
     )
     expect(screen.getByTestId("tabs")).toHaveTextContent("1")
     expect(useCommandTerminalLinkStore.getState().links).toEqual({})
+  })
+
+  function storeCommandTab(id: string) {
+    const pageId = "0b6f3d7e-5a1c-4e2b-9f8a-1c2d3e4f5a6b"
+    window.name = `codeg-terminal-page:${pageId}`
+    sessionStorage.setItem(
+      "codeg:terminal-session:v1",
+      JSON.stringify({
+        version: 1,
+        scope: JSON.stringify(["main", null]),
+        pageId,
+        isOpen: false,
+        activeTabId: id,
+        tabs: [
+          { id, folderId: 7, title: "dev", workingDir: "/tmp", commandId: 42 },
+        ],
+      })
+    )
+  }
+
+  it("marks a command tab that ended before the reload as exited, with no view", async () => {
+    // The launcher reads `exitedTerminals`. A closed mobile drawer keeps the
+    // tab's view unmounted, and the exit itself came before this page did.
+    const id = "3f2c1b0a-9e8d-4c7b-a6f5-e4d3c2b1a098"
+    storeCommandTab(id)
+    h.terminalSnapshot.mockResolvedValue({
+      exists: true,
+      alive: false,
+      data: "done",
+      seq: 1,
+    })
+    render(
+      <TerminalProvider>
+        <Probe />
+      </TerminalProvider>
+    )
+    await waitFor(() =>
+      expect(screen.getByTestId("exited")).toHaveTextContent(id)
+    )
+    expect(h.terminalSnapshot).toHaveBeenCalledWith(id)
+  })
+
+  it("leaves a restored command tab the backend has no record of to its view", async () => {
+    // Missing can mean the reload overtook its launch. The view waits that
+    // out before calling it gone; the provider must not decide sooner.
+    const id = "3f2c1b0a-9e8d-4c7b-a6f5-e4d3c2b1a098"
+    storeCommandTab(id)
+    render(
+      <TerminalProvider>
+        <Probe />
+      </TerminalProvider>
+    )
+    await waitFor(() => expect(h.terminalSnapshot).toHaveBeenCalledWith(id))
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    expect(screen.getByTestId("exited")).toBeEmptyDOMElement()
+  })
+
+  it("hears a command tab's exit with no view mounted", async () => {
+    render(
+      <TerminalProvider>
+        <Probe />
+      </TerminalProvider>
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Run" }))
+    const id = screen.getByTestId("active").textContent
+    await waitFor(() =>
+      expect(h.listeners.has(`terminal://exit/${id}`)).toBe(true)
+    )
+    act(() => {
+      h.listeners.get(`terminal://exit/${id}`)?.()
+    })
+    expect(screen.getByTestId("exited")).toHaveTextContent(id!)
+    // Not asked about: it started in this page, which hears its exit.
+    expect(h.terminalSnapshot).not.toHaveBeenCalled()
+  })
+
+  it("asks about a restored command tab only once it is listening for its exit", async () => {
+    // Asked first, an exit between the answer and the listener would be
+    // heard by nothing.
+    const id = "3f2c1b0a-9e8d-4c7b-a6f5-e4d3c2b1a098"
+    storeCommandTab(id)
+    h.holdSubscribe = true
+    render(
+      <TerminalProvider>
+        <Probe />
+      </TerminalProvider>
+    )
+    await waitFor(() => expect(h.grants).toHaveLength(1))
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    expect(h.terminalSnapshot).not.toHaveBeenCalled()
+    await act(async () => {
+      h.grants[0]()
+    })
+    await waitFor(() => expect(h.terminalSnapshot).toHaveBeenCalledWith(id))
+  })
+
+  it("restores tabs whatever their stored directory or shell", () => {
+    // Neither ever launches anything for a restored tab, so no bound on them
+    // protects a thing — while each one cost a tab its way back.
+    const pageId = "0b6f3d7e-5a1c-4e2b-9f8a-1c2d3e4f5a6b"
+    window.name = `codeg-terminal-page:${pageId}`
+    const ids = [
+      "3f2c1b0a-9e8d-4c7b-a6f5-e4d3c2b1a098",
+      "4e3d2c1b-0a9f-4e8d-b7c6-d5e4f3a2b109",
+      "5f4e3d2c-1b0a-4f9e-8d7c-b6a5f4e3d2c1",
+    ]
+    sessionStorage.setItem(
+      "codeg:terminal-session:v1",
+      JSON.stringify({
+        version: 1,
+        scope: JSON.stringify(["main", null]),
+        pageId,
+        isOpen: true,
+        activeTabId: ids[0],
+        tabs: [
+          {
+            id: ids[0],
+            folderId: 7,
+            title: "long shell",
+            workingDir: "/tmp",
+            shell: `/nix/store/${"a".repeat(600)}/bin/zsh`,
+          },
+          {
+            id: ids[1],
+            folderId: 7,
+            title: "extended path",
+            workingDir: `\\\\?\\C:\\${"d\\".repeat(2500)}`,
+          },
+          {
+            id: ids[2],
+            folderId: 7,
+            title: "relative path",
+            workingDir: "project",
+          },
+        ],
+      })
+    )
+    render(
+      <TerminalProvider>
+        <Probe />
+      </TerminalProvider>
+    )
+    expect(screen.getByTestId("tabs")).toHaveTextContent("3")
+  })
+
+  it("does not count on from a restored number too large to count exactly", () => {
+    const first = render(
+      <TerminalProvider>
+        <Probe />
+      </TerminalProvider>
+    )
+    fireEvent.click(screen.getByRole("button", { name: "New" }))
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Rename huge" }))
+    })
+    first.unmount()
+
+    render(
+      <TerminalProvider>
+        <Probe />
+      </TerminalProvider>
+    )
+    fireEvent.click(screen.getByRole("button", { name: "New" }))
+    fireEvent.click(screen.getByRole("button", { name: "New" }))
+    const titles = screen.getByTestId("title-text").textContent!.split("|")
+    expect(new Set(titles).size).toBe(titles.length)
   })
 })
