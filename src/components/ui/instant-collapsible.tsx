@@ -162,24 +162,30 @@ function CollapsibleContent({ children, ...props }: ComponentProps<"div">) {
       setPresent(false)
       return
     }
-    // tw-animate-css's `animate-out` runs with `animation-fill-mode: none`, so
-    // the moment the exit finishes the content snaps back to its resting
-    // style (opacity 1, no slide) — and a plain setPresent lands in a later
+    // tw-animate-css's `animate-out` defaults to `animation-fill-mode: none`,
+    // so the moment the exit finishes the content snaps back to its resting
+    // style (opacity 1, no slide) — and the unmount below lands in a later
     // task, after that frame paints. That one fully visible frame is the flash
-    // on every collapse. Hold the exit's last keyframe until removal, and
-    // remove synchronously in the animationend handler, which runs before
-    // the frame paints (the same pair Radix Presence uses).
+    // on collapse. Hold the exit's last keyframe until removal instead, as
+    // Radix Presence does. Don't unmount synchronously from the animationend
+    // listener (flushSync): the node would be gone before React dispatches
+    // the same event, so the content's own onAnimationEnd would never fire.
     const prevFillMode = node.style.animationFillMode
     node.style.animationFillMode = "forwards"
     let done = false
     const finish = () => {
       if (done) return
       done = true
-      flushSync(() => setPresent(false))
+      setPresent(false)
     }
     const onAnimationDone = (event: AnimationEvent) => {
       // Child animations bubble; only the content's own exit counts.
-      if (event.target === node) finish()
+      if (event.target !== node) return
+      // A cancelled exit leaves no keyframe for `forwards` to hold, so the
+      // content is already back at its resting style: unmount before that
+      // paints. React has no onAnimationCancel for this to starve.
+      if (event.type === "animationcancel") flushSync(finish)
+      else finish()
     }
     node.addEventListener("animationend", onAnimationDone)
     node.addEventListener("animationcancel", onAnimationDone)
