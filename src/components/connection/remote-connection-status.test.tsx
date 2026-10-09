@@ -93,6 +93,48 @@ describe("RemoteConnectionStatus", () => {
     expect(screen.getByRole("status")).toBeInTheDocument()
   })
 
+  it("shows a requested retry's progress at once, without the grace window", () => {
+    const { transport } = renderStatus()
+    act(() => transport.setState("disconnected"))
+    transport.reconnectNow.mockImplementation(() =>
+      transport.setState("reconnecting")
+    )
+
+    fireEvent.click(screen.getByRole("button", { name: "Reconnect now" }))
+    expect(screen.getByRole("status")).toHaveTextContent("Connection lost")
+    expect(
+      screen.getByText(enMessages.WebConnection.reconnectingDescription)
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Reconnect now" })
+    ).not.toBeInTheDocument()
+
+    // The retry gives up again: the action is back.
+    act(() => transport.setState("disconnected"))
+    fireEvent.click(screen.getByRole("button", { name: "Reconnect now" }))
+    expect(screen.getByRole("status")).toBeInTheDocument()
+
+    // Once a retry has connected, a later outage gets its grace again.
+    act(() => transport.setState("connected"))
+    act(() => transport.setState("reconnecting"))
+    expect(screen.queryByRole("status")).not.toBeInTheDocument()
+    act(() => vi.advanceTimersByTime(4_000))
+    expect(screen.getByRole("status")).toBeInTheDocument()
+  })
+
+  it("keeps the grace window after a retry the transport did not start", () => {
+    const { transport } = renderStatus()
+    act(() => transport.setState("disconnected"))
+
+    // The mock ignores the retry, as the transport does while one is running.
+    fireEvent.click(screen.getByRole("button", { name: "Reconnect now" }))
+    expect(transport.reconnectNow).toHaveBeenCalledTimes(1)
+    act(() => transport.setState("connected"))
+    act(() => transport.setState("reconnecting"))
+
+    expect(screen.queryByRole("status")).not.toBeInTheDocument()
+  })
+
   it("unsubscribes and cancels the grace timer on unmount", () => {
     const { transport, unmount } = renderStatus()
     expect(transport.listeners.size).toBe(1)

@@ -33,6 +33,10 @@ export function RemoteConnectionStatus({
   )
   const state = useSyncExternalStore(subscribe, getSnapshot, () => "connected")
   const [graceElapsed, setGraceElapsed] = useState(false)
+  // A retry the user just asked for shows its progress at once: the pill is
+  // already up, and hiding it for the grace window reads as "nothing
+  // happened" (a server that still refuses gives up within seconds).
+  const [retryRequested, setRetryRequested] = useState(false)
 
   useEffect(() => {
     // Settings and other restored remote shells may have no conversation
@@ -46,10 +50,21 @@ export function RemoteConnectionStatus({
     return () => {
       clearTimeout(timer)
       setGraceElapsed(false)
+      setRetryRequested(false)
     }
   }, [state])
 
-  if (state === "connected" || (state === "reconnecting" && !graceElapsed)) {
+  const retry = () => {
+    transport.reconnectNow()
+    // Only a retry that started: the transport ignores one while another
+    // is still under way.
+    setRetryRequested(transport.getConnectionSnapshot() === "reconnecting")
+  }
+
+  if (
+    state === "connected" ||
+    (state === "reconnecting" && !graceElapsed && !retryRequested)
+  ) {
     return null
   }
 
@@ -73,7 +88,7 @@ export function RemoteConnectionStatus({
         )}
       </div>
       {!retrying && (
-        <Button size="sm" onClick={() => transport.reconnectNow()}>
+        <Button size="sm" onClick={retry}>
           {t("reconnectNow")}
         </Button>
       )}
