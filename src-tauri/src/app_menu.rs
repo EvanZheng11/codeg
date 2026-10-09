@@ -21,6 +21,11 @@
 //! and a menu item there would close the window the same way whenever that
 //! shortcut did not apply.
 //!
+//! The Window menu also opens the local workspace (`main`), which a launch
+//! that brings back only remote workspaces leaves hidden. The menu bar is
+//! there whatever the key window shows — a remote workspace whose server is
+//! down, or one whose credentials expired.
+//!
 //! Windows and Linux have no application menu, so nothing there turns an
 //! unclaimed Ctrl+W into closing the window.
 
@@ -39,6 +44,8 @@ use tauri::{AppHandle, Emitter, Manager, Wry};
 const CLOSE_ID: &str = "app-menu:close";
 /// The Window menu's "Close Window", without a shortcut.
 const CLOSE_WINDOW_ID: &str = "app-menu:close-window";
+/// The Window menu's "Open Local Workspace": `main`, unminimized, shown and
+/// focused, as the tray's "Show Workspace" does.
 const OPEN_LOCAL_WORKSPACE_ID: &str = "app-menu:open-local-workspace";
 
 /// Sent to a workspace window when ⌘W reached the menu while it was the key
