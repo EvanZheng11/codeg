@@ -118,12 +118,18 @@ struct CompletedTerminal {
 }
 
 impl CompletedTerminal {
-    /// The record of `instance`, and its child — which the caller either
-    /// keeps with the record or ends itself.
+    /// The record of `instance`, plus what the record does not keep: its
+    /// child, which the caller keeps with the record or ends itself, and its
+    /// input. Dropping the input sends the PTY a newline and end-of-input (see
+    /// portable-pty's writer), so the caller decides when that happens.
     fn from_instance(
         mut instance: TerminalInstance,
         exit_code: Option<u32>,
-    ) -> (Self, Box<dyn portable_pty::Child + Send>) {
+    ) -> (
+        Self,
+        Box<dyn portable_pty::Child + Send>,
+        mpsc::Sender<Vec<u8>>,
+    ) {
         cleanup_temp_files(&mut instance.temp_files);
         let entry = Self {
             size: instance.master.get_size().ok(),
@@ -133,7 +139,7 @@ impl CompletedTerminal {
             child: None,
             exit_code,
         };
-        (entry, instance._child)
+        (entry, instance._child, instance.write_tx)
     }
 }
 
@@ -151,23 +157,24 @@ impl CompletedTerminals {
     /// Record a terminal whose process has ended, or may have: its child
     /// stays with the record, to be reaped once it exits.
     fn insert(&mut self, id: String, instance: TerminalInstance, exit_code: Option<u32>) {
-        let (mut entry, child) = CompletedTerminal::from_instance(instance, exit_code);
+        let (mut entry, child, _input) = CompletedTerminal::from_instance(instance, exit_code);
         entry.child = Some(child);
         self.remove(&id);
         self.entries.insert(id, entry);
     }
 
-    /// Record a terminal the caller is about to end, handing its child back
-    /// so the kill and the wait for it happen outside this table's lock.
+    /// Record a terminal the caller is about to end, handing back its child
+    /// and its input: the kill and the wait happen outside this table's
+    /// lock, and the input is to be dropped only once the process is gone.
     fn insert_ending(
         &mut self,
         id: String,
         instance: TerminalInstance,
-    ) -> Box<dyn portable_pty::Child + Send> {
-        let (entry, child) = CompletedTerminal::from_instance(instance, None);
+    ) -> (Box<dyn portable_pty::Child + Send>, mpsc::Sender<Vec<u8>>) {
+        let (entry, child, input) = CompletedTerminal::from_instance(instance, None);
         self.remove(&id);
         self.entries.insert(id, entry);
-        child
+        (child, input)
     }
 
     fn remove(&mut self, id: &str) -> bool {
@@ -705,11 +712,16 @@ impl TerminalManager {
             if keep_record {
                 // Recorded before the table lock is released, so no snapshot
                 // finds this id in neither table while the process dies.
-                let mut child = lock_completed(&self.completed)
+                let (mut child, input) = lock_completed(&self.completed)
                     .insert_ending(terminal_id.to_string(), instance);
                 drop(terminals);
                 let _ = child.kill();
                 let _ = child.wait();
+                // Only now: closed earlier, the input hands a live program an
+                // Enter and an end-of-input before it dies (a prompt would
+                // take its default), and the echoed "^D" ends up in the
+                // output kept for the tab.
+                drop(input);
             } else {
                 lock_completed(&self.completed).remove(terminal_id);
                 drop(terminals);
@@ -734,12 +746,17 @@ impl TerminalManager {
         // The later insert consumes it atomically under the terminal map
         // lock; ordinary view unmount never calls kill.
         if uuid::Uuid::parse_str(terminal_id).is_ok() {
+            let spawning = self.spawning.lock().unwrap_or_else(|p| p.into_inner());
             let mut pending = self
                 .cancelled_spawns
                 .lock()
                 .unwrap_or_else(|p| p.into_inner());
             let now = Instant::now();
-            pending.retain(|_, time| now.duration_since(*time) < CANCELLED_SPAWN_TTL);
+            // A mark whose launch is already underway is kept regardless of
+            // age: that launch checks it again just before it inserts.
+            pending.retain(|id, time| {
+                spawning.contains_key(id) || now.duration_since(*time) < CANCELLED_SPAWN_TTL
+            });
             pending.insert(terminal_id.to_string(), now);
             return Ok(());
         }
@@ -1278,10 +1295,14 @@ mod tests {
             (-1, Some(libc::ECHILD)),
             "stop left its process running or unreaped"
         );
+        // The input is closed only after that, so no Enter and end-of-input
+        // reached the process, and no echoed "^D" reached the kept output.
+        std::thread::sleep(Duration::from_millis(300));
         let stopped = manager.snapshot(id);
         assert!(stopped.exists, "the stop forgot the terminal");
         assert!(!stopped.alive);
         assert!(stopped.data.contains("stop-marker"));
+        assert!(!stopped.data.contains("^D"), "{:?}", stopped.data);
         // Ended by us, not by itself: no exit status to report.
         assert_eq!(stopped.exit_code, None);
         assert!(super::lock_terminals(&manager.terminals).is_empty());
@@ -1304,10 +1325,55 @@ mod tests {
                 .kill(&uuid::Uuid::new_v4().to_string())
                 .expect("other closes");
         }
-        assert!(manager
+        let refused = manager
             .spawn_with_id(sleeping_shell(&first, "sleep 30"), EventEmitter::Noop)
-            .is_err());
+            .expect_err("the closed tab's launch");
+        assert!(refused.to_string().contains("cancelled"), "{refused}");
         assert!(!manager.snapshot(&first).exists);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn a_launch_underway_keeps_its_mark_however_old() {
+        // The launch checks for a mark once more just before it inserts.
+        // Pruning by age must not take the mark out from under it then.
+        use std::time::{Duration, Instant};
+
+        let manager = TerminalManager::new();
+        let launching = uuid::Uuid::new_v4().to_string();
+        let ages_ago = Instant::now()
+            .checked_sub(super::CANCELLED_SPAWN_TTL + Duration::from_secs(1))
+            .expect("a past instant");
+        manager
+            .spawning
+            .lock()
+            .unwrap()
+            .insert(launching.clone(), "main".to_string());
+        manager
+            .cancelled_spawns
+            .lock()
+            .unwrap()
+            .insert(launching.clone(), ages_ago);
+
+        manager
+            .kill(&uuid::Uuid::new_v4().to_string())
+            .expect("prune");
+        assert!(manager
+            .cancelled_spawns
+            .lock()
+            .unwrap()
+            .contains_key(&launching));
+
+        // Once nothing is launching under that id, age applies again.
+        manager.spawning.lock().unwrap().remove(&launching);
+        manager
+            .kill(&uuid::Uuid::new_v4().to_string())
+            .expect("prune");
+        assert!(!manager
+            .cancelled_spawns
+            .lock()
+            .unwrap()
+            .contains_key(&launching));
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -1511,9 +1577,10 @@ mod tests {
             temp_files: vec![],
         };
         manager.kill(&id).expect("close overtakes spawn");
-        assert!(manager
+        let refused = manager
             .spawn_with_id(opts(&id), EventEmitter::Noop)
-            .is_err());
+            .expect_err("the closed tab's launch");
+        assert!(refused.to_string().contains("cancelled"), "{refused}");
         assert!(!manager.snapshot(&id).exists);
         // Reservation is consumed. An intentional later new tab may use the ID.
         manager
