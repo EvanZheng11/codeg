@@ -850,6 +850,18 @@ impl SessionState {
                     // new error scope, so stale recoverable errors must not be
                     // resurrected by a later snapshot attach.
                     self.last_error = None;
+                    // ...and a new turn starts from an empty live message, as
+                    // the reducer's does here. Anything in it now arrived
+                    // between turns, which no client rendered: left in place it
+                    // would open this turn's snapshot — a client attaching
+                    // mid-turn would render it twice, since a custom agent's
+                    // history already holds it as a turn of its own — and this
+                    // turn's captured result. `begin_agent_initiated_turn`
+                    // does the same for a turn the agent starts itself. The
+                    // tool-call table stays: it is cleared at `TurnComplete`,
+                    // and nothing renders an entry the live message no longer
+                    // references.
+                    self.live_message = None;
                 }
                 self.status = status.clone();
             }
@@ -2809,6 +2821,42 @@ mod tests {
         s.turn_in_flight = true;
         assert!(!s.begin_agent_initiated_turn());
         assert!(!s.agent_initiated_turn);
+    }
+
+    /// Text the agent sends between turns still lands in `live_message`, but a
+    /// prompted turn starts from an empty one — as every client's reducer does
+    /// at `Prompting` — so neither the snapshot a mid-turn attach renders nor
+    /// the result the turn hands a delegation parent opens with it.
+    #[test]
+    fn a_prompted_turn_starts_from_an_empty_live_message() {
+        let text = |text: &str| AcpEvent::ContentDelta {
+            text: text.into(),
+            parent_tool_use_id: None,
+        };
+        let mut s = fresh_state();
+        s.apply_event(&text("The job finished."));
+        assert!(s.live_message.is_some());
+
+        s.apply_event(&AcpEvent::StatusChanged {
+            status: ConnectionStatus::Prompting,
+        });
+        assert!(s.live_message.is_none());
+
+        s.apply_event(&text("You're welcome."));
+        let live = s
+            .to_snapshot()
+            .live_message
+            .expect("the turn's live message");
+        assert!(matches!(
+            live.content.as_slice(),
+            [LiveContentBlock::Text { text, .. }] if text == "You're welcome."
+        ));
+        s.apply_event(&AcpEvent::TurnComplete {
+            session_id: "ext".into(),
+            stop_reason: "end_turn".into(),
+            agent_type: "claude_code".into(),
+        });
+        assert_eq!(s.last_assistant_text.as_deref(), Some("You're welcome."));
     }
 
     #[test]
