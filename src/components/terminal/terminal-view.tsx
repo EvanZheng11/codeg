@@ -426,7 +426,10 @@ export function TerminalView({
       // 往返，中间到的 chunk 既可能已经在快照里（重复），也可能不在（丢失）。
       // 两者靠 seq 区分——见下面的 writeEvent 与 `TerminalEvent.seq`。
       let replayBuffer: TerminalEvent[] | null = attach ? [] : null
-      let exitWhileBuffering: TerminalEvent | null = null
+      // Every exit that lands while buffering, not just the latest: until the
+      // snapshot names the current generation there is no telling which one
+      // is this process's, and a stale one arriving after it must not hide it.
+      let exitsWhileBuffering: TerminalEvent[] = []
       let currentGeneration: string | null = null
       let exitShown = false
       let unlistenReconnect: (() => void) | null = null
@@ -443,6 +446,11 @@ export function TerminalView({
             : tRef.current("processExitedWithCode", { code })
         term.write(`\r\n\x1b[90m[${message}]\x1b[0m\r\n`)
       }
+
+      const isCurrentExit = (event: TerminalEvent) =>
+        !currentGeneration ||
+        !event.generation ||
+        event.generation === currentGeneration
 
       const showUnavailable = (confirmedMissing: boolean) => {
         if (exitShown) return
@@ -498,28 +506,16 @@ export function TerminalView({
           snapshotSeqFloor = snapshotSeq
         }
         for (const event of buffered) writeEvent(event)
-        if (exitWhileBuffering) {
-          const exit = exitWhileBuffering
-          exitWhileBuffering = null
-          if (
-            !currentGeneration ||
-            !exit.generation ||
-            exit.generation === currentGeneration
-          )
-            showExit()
-        }
+        const exits = exitsWhileBuffering
+        exitsWhileBuffering = []
+        if (exits.some(isCurrentExit)) showExit()
       }
 
       const unlistenExit = await subscribe<TerminalEvent>(
         `terminal://exit/${terminalId}`,
         (event) => {
-          if (replayBuffer) exitWhileBuffering = event
-          else if (
-            !currentGeneration ||
-            !event.generation ||
-            event.generation === currentGeneration
-          )
-            showExit()
+          if (replayBuffer) exitsWhileBuffering.push(event)
+          else if (isCurrentExit(event)) showExit()
         }
       )
 
@@ -534,14 +530,16 @@ export function TerminalView({
         return
       }
 
+      const fitIfReady = () => {
+        const el = containerRef.current
+        if (!el) return
+        if (!isActiveRef.current || !isVisibleRef.current) return
+        if (el.clientWidth <= 0 || el.clientHeight <= 0) return
+        fitAddon.fit()
+      }
+
       /** 把快照写进这个全新的 xterm，并放行不在快照里的那段缓冲输出。 */
-      const applySnapshot = (snapshot: {
-        data: string
-        seq: number
-        alive: boolean
-        exit_code?: number | null
-        generation?: string | null
-      }) => {
+      const applySnapshot = (snapshot: TerminalSnapshot) => {
         if (snapshot.alive && exitShown) {
           writeQueue.dispose()
           writeQueue = createWriteQueue((d) => terminalWrite(terminalId, d))
@@ -550,19 +548,28 @@ export function TerminalView({
           exitShown = false
         }
         currentGeneration = snapshot.generation ?? null
+        if (snapshot.cols && snapshot.rows) {
+          // Replay at the size the output was laid out for. Drawn narrower,
+          // a full-width line wraps: zsh pads its end-of-output mark to the
+          // right edge, and a stray "%" line is left behind. The PTY is this
+          // size already, so this sends no resize; fitting to the pane does,
+          // once the replay below has been drawn.
+          lastResizeRef.current = { cols: snapshot.cols, rows: snapshot.rows }
+          term.resize(snapshot.cols, snapshot.rows)
+        }
         if (snapshot.data) term.write(snapshot.data)
-        const pendingExit = exitWhileBuffering
-        exitWhileBuffering = null
+        const pendingExits = exitsWhileBuffering
+        exitsWhileBuffering = []
         flushReplay(snapshot.seq)
-        if (
-          !snapshot.alive ||
-          (pendingExit &&
-            (!currentGeneration ||
-              !pendingExit.generation ||
-              pendingExit.generation === currentGeneration))
-        ) {
+        if (!snapshot.alive || pendingExits.some(isCurrentExit)) {
           showExit(snapshot.exit_code)
         }
+        // xterm parses writes later, in order; this runs after all of them.
+        term.write("", () => {
+          requestAnimationFrame(() => {
+            if (!cancelled) fitIfReady()
+          })
+        })
         setLoading(false)
       }
 
@@ -593,7 +600,7 @@ export function TerminalView({
         // and never drawn — must still be flushed rather than dropped.
         if (!replayBuffer) {
           replayBuffer = []
-          exitWhileBuffering = null
+          exitsWhileBuffering = []
         }
         void terminalSnapshot(terminalId)
           .then((snapshot) => {
@@ -605,6 +612,9 @@ export function TerminalView({
             }
             term.reset()
             snapshotSeqFloor = 0
+            // The reset wiped the exit line with everything else; an ended
+            // process gets it drawn again from the snapshot.
+            if (!snapshot.alive) exitShown = false
             applySnapshot(snapshot)
           })
           .catch(() => {
@@ -633,14 +643,19 @@ export function TerminalView({
           !!(snapshot.alive || snapshot.exists)
       ) => {
         const deadline = Date.now() + 10_000
+        let lastAnswer: TerminalSnapshot | null = null
         do {
           const snapshot = await terminalSnapshot(terminalId).catch(() => null)
           if (cancelled) return null
           if (snapshot && accept(snapshot)) return snapshot
           if (!retryMissing) return snapshot
+          if (snapshot) lastAnswer = snapshot
           await new Promise((resolve) => setTimeout(resolve, 150))
         } while (!cancelled && Date.now() < deadline)
-        return null
+        // Out of time: the backend's last word, so a session it reported
+        // missing all along counts as gone, while one only ever unreachable
+        // stays unconfirmed.
+        return cancelled ? null : lastAnswer
       }
 
       // Read once: this attach runs under the policy it started with.
@@ -744,14 +759,6 @@ export function TerminalView({
 
       bootstrapping = false
       if (readyDuringStartup) syncFromBackend()
-
-      const fitIfReady = () => {
-        const el = containerRef.current
-        if (!el) return
-        if (!isActiveRef.current || !isVisibleRef.current) return
-        if (el.clientWidth <= 0 || el.clientHeight <= 0) return
-        fitAddon.fit()
-      }
 
       // Only fit when terminal is actually visible/active.
       requestAnimationFrame(() => {

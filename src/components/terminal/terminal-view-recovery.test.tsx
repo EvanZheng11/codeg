@@ -7,13 +7,16 @@ import type { TerminalEvent, TerminalSnapshot } from "@/lib/types"
 const h = vi.hoisted(() => ({
   writes: [] as string[],
   resets: 0,
+  fits: 0,
   emulators: 0,
   disposed: 0,
   snapshot: vi.fn(),
   spawn: vi.fn(),
   kill: vi.fn(async () => {}),
   write: vi.fn(async () => {}),
+  resize: vi.fn(async () => {}),
   onData: null as ((data: string) => void) | null,
+  onResize: null as ((size: { cols: number; rows: number }) => void) | null,
   handlers: new Map<string, (event: TerminalEvent) => void>(),
   ready: null as (() => void) | null,
 }))
@@ -28,7 +31,7 @@ vi.mock("@/lib/api", () => ({
   terminalSnapshot: h.snapshot,
   terminalSpawn: h.spawn,
   terminalWrite: h.write,
-  terminalResize: vi.fn(async () => {}),
+  terminalResize: h.resize,
   terminalKill: h.kill,
 }))
 vi.mock("@/lib/platform", () => ({
@@ -83,11 +86,26 @@ vi.mock("@xterm/xterm", () => ({
         },
       }
     }
-    onResize() {
-      return { dispose() {} }
+    cols = 80
+    rows = 24
+    resize(cols: number, rows: number) {
+      if (cols === this.cols && rows === this.rows) return
+      this.cols = cols
+      this.rows = rows
+      h.writes.push(`<resize ${cols}x${rows}>`)
+      h.onResize?.({ cols, rows })
     }
-    write(data: string) {
-      h.writes.push(data)
+    onResize(cb: (size: { cols: number; rows: number }) => void) {
+      h.onResize = cb
+      return {
+        dispose() {
+          h.onResize = null
+        },
+      }
+    }
+    write(data: string, parsed?: () => void) {
+      if (data) h.writes.push(data)
+      parsed?.()
     }
     reset() {
       h.resets++
@@ -102,7 +120,9 @@ vi.mock("@xterm/xterm", () => ({
 vi.mock("@xterm/addon-ligatures", () => ({ LigaturesAddon: class {} }))
 vi.mock("@xterm/addon-fit", () => ({
   FitAddon: class {
-    fit() {}
+    fit() {
+      h.fits++
+    }
   },
 }))
 vi.mock("@xterm/addon-web-links", () => ({ WebLinksAddon: class {} }))
@@ -129,6 +149,7 @@ describe("TerminalView recovery", () => {
   beforeEach(() => {
     h.writes.length = 0
     h.resets = 0
+    h.fits = 0
     h.emulators = 0
     h.disposed = 0
     h.snapshot.mockReset()
@@ -144,7 +165,9 @@ describe("TerminalView recovery", () => {
     h.spawn.mockResolvedValue("terminal-1")
     h.kill.mockClear()
     h.write.mockClear()
+    h.resize.mockClear()
     h.onData = null
+    h.onResize = null
     h.handlers.clear()
     h.ready = null
   })
@@ -758,5 +781,161 @@ describe("TerminalView recovery", () => {
     })
     await waitFor(() => expect(onSpawned).toHaveBeenCalledWith("terminal-1"))
     expect(h.kill).not.toHaveBeenCalled()
+  })
+
+  it("replays a snapshot at the size its output was laid out for", async () => {
+    // xterm opens at 80 columns. Drawn there, a 133-column line wraps —
+    // zsh's end-of-output mark pads to the right edge, so every reload left
+    // a stray "%" line behind.
+    h.snapshot.mockResolvedValueOnce({
+      ...snapshot("wide output", 3),
+      cols: 133,
+      rows: 41,
+    })
+    const view = render(
+      <TerminalView {...props} attach spawnOnMissing={false} reuseCompleted />
+    )
+    await waitFor(() => expect(h.writes).toContain("wide output"))
+    expect(h.writes.indexOf("<resize 133x41>")).toBeGreaterThan(-1)
+    expect(h.writes.indexOf("<resize 133x41>")).toBeLessThan(
+      h.writes.indexOf("wide output")
+    )
+    // The PTY already has that size: telling it again would be noise.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 80))
+    })
+    expect(h.resize).not.toHaveBeenCalled()
+    view.unmount()
+  })
+
+  it("treats a restored tab the backend never knew as gone, not unconfirmed", async () => {
+    // Retried until the deadline because a reload can beat the spawn request.
+    // If every answer was "no such terminal", the tab's input is dead and the
+    // tab is over — the same as an explicit "missing" on reconnect.
+    let now = 0
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => {
+      now += 20_000
+      return now
+    })
+    const exited = vi.fn()
+    const view = render(
+      <TerminalView
+        {...props}
+        attach
+        spawnOnMissing={false}
+        reuseCompleted
+        onProcessExited={exited}
+      />
+    )
+    await waitFor(() => expect(h.writes.join("")).toContain("unavailable"))
+    clock.mockRestore()
+    expect(exited).toHaveBeenCalledWith("terminal-1")
+    act(() => {
+      h.onData?.("x")
+    })
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    expect(h.write).not.toHaveBeenCalled()
+    view.unmount()
+  })
+
+  it("draws an ended terminal's exit line again after a reconnect redraws it", async () => {
+    const ended = { ...snapshot("final output", 3, false), exit_code: 7 }
+    h.snapshot.mockResolvedValueOnce(ended)
+    const view = render(
+      <TerminalView {...props} attach spawnOnMissing={false} reuseCompleted />
+    )
+    await waitFor(() =>
+      expect(h.writes.join("")).toContain("Process exited (code 7)")
+    )
+
+    h.snapshot.mockResolvedValueOnce(ended)
+    act(() => {
+      h.ready?.()
+    })
+    await waitFor(() => expect(h.resets).toBe(1))
+    expect(h.writes.slice(h.writes.indexOf("<reset>") + 1).join("")).toContain(
+      "Process exited (code 7)"
+    )
+    view.unmount()
+  })
+
+  it("keeps this process's exit when an older one's lands after it", async () => {
+    // Both arrive before the snapshot names the current generation. Only the
+    // order of arrival differs from the usual case, and it must not decide
+    // whether the pane learns that its process ended.
+    let finish!: (value: TerminalSnapshot) => void
+    h.snapshot.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        })
+    )
+    const view = render(
+      <TerminalView {...props} attach spawnOnMissing={false} reuseCompleted />
+    )
+    await waitFor(() => expect(h.snapshot).toHaveBeenCalledTimes(1))
+    act(() => {
+      for (const generation of ["new-generation", "old-generation"]) {
+        h.handlers.get("terminal://exit/terminal-1")?.({
+          terminal_id: "terminal-1",
+          data: "",
+          seq: 0,
+          generation,
+        })
+      }
+    })
+    await act(async () => {
+      finish(snapshot("taken before the exit", 1))
+    })
+    expect(h.writes.join("")).toContain("taken before the exit")
+    expect(h.writes.join("")).toContain("processExited")
+    view.unmount()
+  })
+
+  it("fits the pane again once a reconnect's replay is drawn", async () => {
+    // The replay is drawn at the PTY's size, which another viewer may have
+    // set. The pane has to be fitted back to itself afterwards, or it stays
+    // at that size until its container happens to change.
+    const width = vi
+      .spyOn(Element.prototype, "clientWidth", "get")
+      .mockReturnValue(800)
+    const height = vi
+      .spyOn(Element.prototype, "clientHeight", "get")
+      .mockReturnValue(600)
+    try {
+      h.snapshot.mockResolvedValueOnce({
+        ...snapshot("before", 2),
+        cols: 133,
+        rows: 41,
+      })
+      const view = render(
+        <TerminalView {...props} attach spawnOnMissing={false} reuseCompleted />
+      )
+      await waitFor(() => expect(h.writes).toContain("before"))
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 60))
+      })
+      const fitted = h.fits
+
+      h.snapshot.mockResolvedValueOnce({
+        ...snapshot("before and after", 3),
+        cols: 90,
+        rows: 30,
+      })
+      act(() => {
+        h.ready?.()
+      })
+      await waitFor(() => expect(h.resets).toBe(1))
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 60))
+      })
+      expect(h.fits).toBeGreaterThan(fitted)
+      view.unmount()
+    } finally {
+      width.mockRestore()
+      height.mockRestore()
+    }
   })
 })
