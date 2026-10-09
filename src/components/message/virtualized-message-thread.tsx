@@ -24,6 +24,22 @@ import {
  */
 const LOAD_OLDER_THRESHOLD_PX = 240
 
+/**
+ * Keys the browser scrolls a focused viewport with. Modifiers don't matter:
+ * Cmd+ArrowDown and Ctrl+End jump to the end, Shift+Space pages back up.
+ */
+const SCROLL_KEYS = new Set([
+  "ArrowUp",
+  "ArrowDown",
+  "ArrowLeft",
+  "ArrowRight",
+  "PageUp",
+  "PageDown",
+  "Home",
+  "End",
+  " ",
+])
+
 interface VirtualizedMessageThreadProps<T> {
   /** Data to virtualise — each entry becomes one virtual row. */
   items: T[]
@@ -251,16 +267,21 @@ function VirtualizedMessageThreadImpl<T>({
       el.setAttribute("data-focus-origin", "pointer")
       el.focus({ preventScroll: true })
     }
-    // The pointer-origin marker holds until focus really leaves the viewport,
-    // so a clicked transcript never grows the ring — not even once a key is
-    // pressed (pressing any key makes the browser match :focus-visible, so
-    // clearing the marker on keydown put a ring around the whole transcript on
-    // a mere Esc). Tabbing in still shows the ring: that focus never sets it.
-    //
-    // A blur alone isn't "really leaves": the whole window losing focus (switch
-    // apps, then resize the window to come back) blurs the viewport too, yet it
-    // stays the document's active element and the browser re-focuses it on the
-    // way back — without the marker, the ring appeared on return. So look after
+    // The pointer-origin marker only hides the ring for the click that
+    // focused the viewport. Once the user scrolls it with the keyboard, drop
+    // the marker so the ring reappears — keeping the keyboard focus indicator
+    // visible per WCAG 2.4.7. Other keys keep it: Chromium already matches
+    // :focus-visible after that script focus, so clearing on any key ringed
+    // the whole transcript on a mere Esc, or on Ctrl/Cmd+C to copy a
+    // selection. Tabbing in still shows the ring: that focus never sets it.
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (SCROLL_KEYS.has(e.key)) clearPointerFocus()
+    }
+    // Otherwise the marker holds until focus really leaves the viewport. A
+    // blur alone isn't that: the whole window losing focus (switch apps, then
+    // resize the window to come back) blurs the viewport too, yet it stays the
+    // document's active element and the browser re-focuses it on the way
+    // back — without the marker, the ring appeared on return. So look after
     // the blur settles: only a viewport that is no longer active drops it.
     const onBlur = () => {
       window.clearTimeout(blurCheck)
@@ -268,11 +289,22 @@ function VirtualizedMessageThreadImpl<T>({
         if (document.activeElement !== el) clearPointerFocus()
       })
     }
+    // Focus can also move on while the window is away (a script focuses
+    // another control). The viewport gets no second blur for that — its blur
+    // already went out with the window's — so look again when the window
+    // comes back, or Tabbing back in later would bring no ring.
+    const onWindowFocus = () => {
+      if (document.activeElement !== el) clearPointerFocus()
+    }
     el.addEventListener("pointerdown", onPointerDown)
+    el.addEventListener("keydown", onKeyDown)
     el.addEventListener("blur", onBlur)
+    window.addEventListener("focus", onWindowFocus)
     return () => {
       el.removeEventListener("pointerdown", onPointerDown)
+      el.removeEventListener("keydown", onKeyDown)
       el.removeEventListener("blur", onBlur)
+      window.removeEventListener("focus", onWindowFocus)
       clearPointerFocus()
     }
   }, [scrollRef])
