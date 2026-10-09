@@ -702,6 +702,52 @@ mod tests {
     }
 
     #[test]
+    fn activation_prefers_the_most_recent_existing_workspace() {
+        let mut state = SessionState::default();
+        state.mark_open(LOCAL);
+        state.mark_open(remote(1));
+        state.mark_open(remote(2));
+        assert_eq!(state.activation_target(|_| true), Some(remote(2)));
+        assert_eq!(
+            state.activation_target(|window| window != remote(2)),
+            Some(remote(1))
+        );
+        state.mark_open(LOCAL);
+        assert_eq!(state.activation_target(|_| true), Some(LOCAL));
+    }
+
+    #[test]
+    fn activation_does_not_reopen_a_closed_local_workspace() {
+        let mut state = SessionState::default();
+        state.mark_open(LOCAL);
+        state.mark_open(remote(1));
+        state.mark_closed(LOCAL);
+        // main still physically exists, hidden to tray; it must stay hidden.
+        assert_eq!(state.activation_target(|_| true), Some(remote(1)));
+        state.mark_closed(remote(1));
+        assert_eq!(state.activation_target(|_| true), Some(LOCAL));
+    }
+
+    #[test]
+    fn activation_waits_for_a_remote_only_restore() {
+        // As `begin_restore` leaves it: the remembered front is still pending.
+        let mut state = SessionState {
+            pending: vec![remote(1)],
+            restoring: true,
+            restore_front: Some(remote(1)),
+            ..SessionState::default()
+        };
+        assert_eq!(state.activation_target(|window| window == LOCAL), None);
+        state.mark_open(remote(1));
+        assert_eq!(state.activation_target(|_| true), Some(remote(1)));
+        assert_eq!(state.snapshot(), vec![remote(1)]);
+        // Still restoring, but nothing is left pending to wait for: with the
+        // restored window closed again, local is the only workspace left.
+        state.mark_closed(remote(1));
+        assert_eq!(state.activation_target(|_| true), Some(LOCAL));
+    }
+
+    #[test]
     fn stored_list_round_trips() {
         let windows = [remote(4), LOCAL, remote(2)];
         let raw = encode_session(&windows).unwrap();

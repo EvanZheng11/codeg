@@ -1375,7 +1375,9 @@ mod tauri_app {
                 // `list_open_folder_details` / `list_opened_tabs` inside it. It
                 // starts hidden only when it was hidden to the tray at quit and
                 // other workspace windows are coming back in its place; the
-                // tray and explicit local-workspace actions still bring it up.
+                // tray, a `codeg://` link and the other explicit local-workspace
+                // actions still bring it up, and so do the Dock and a second
+                // launch once no other workspace is open or on its way back.
                 if app.get_webview_window("main").is_none() {
                     let url = tauri::WebviewUrl::App(workspace_path.into());
                     let builder = tauri::WebviewWindowBuilder::new(app, "main", url)
@@ -2199,8 +2201,10 @@ mod tauri_app {
                 tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => shut_down(app),
                 #[cfg(target_os = "macos")]
                 tauri::RunEvent::Reopen { .. } => {
-                    // Auxiliary windows do not determine which workspace is
-                    // active. Restore the last local/remote workspace instead.
+                    // Every Dock click, whatever `has_visible_windows` says:
+                    // it is true whenever an auxiliary window (pet, settings,
+                    // commit…) is up, even with every workspace hidden or
+                    // minimized. Raise the last-used local/remote workspace.
                     workspace_windows::activate_workspace(app);
                 }
                 _ => {}
