@@ -1767,8 +1767,17 @@
     flex-basis 240ms ease-out;
 }
 
+/* The tab strips' corner reserves (`ChromeReserve`) slide with the panels:
+   a reserve that snapped in/out while its column was still sliding made the
+   tabs jump by the reserve's width and then slide back. Descendant (not
+   child) selector — the reserves sit deep inside the shell's panels. */
+.panel-slide-animating .chrome-reserve {
+  transition: width 240ms ease-out;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .panel-slide-animating > [data-panel] {
+  .panel-slide-animating > [data-panel],
+  .panel-slide-animating .chrome-reserve {
     transition: none;
   }
 }

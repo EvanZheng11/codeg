@@ -70,6 +70,7 @@ import { FILL_MODE_STYLE } from "@/lib/workspace-background"
 import { TabBar } from "@/components/tabs/tab-bar"
 import { TerminalPanel } from "@/components/terminal/terminal-panel"
 import { AuxPanel } from "@/components/layout/aux-panel"
+import { ChromeReserve } from "@/components/layout/chrome-reserve"
 import { LeftEdgeChrome } from "@/components/layout/left-edge-chrome"
 import { RightEdgeChrome } from "@/components/layout/right-edge-chrome"
 import { WorkspaceChromeController } from "@/components/layout/workspace-chrome-controller"
@@ -413,13 +414,7 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
                   SplitStripCornerReserve in conversation-detail-panel). */}
                 {!isConvSplit && (
                   <div className="flex h-10 shrink-0 items-stretch bg-muted ws-transparent-bg">
-                    {!sidebarOpen && (
-                      <div
-                        data-tauri-drag-region
-                        className="h-full shrink-0 ws-strip-line"
-                        style={{ width: leftReserve }}
-                      />
-                    )}
+                    <ChromeReserve width={sidebarOpen ? 0 : leftReserve} />
                     <div className="flex min-w-0 flex-1 items-stretch">
                       {hasConvTabs ? (
                         <TabBar />
@@ -432,13 +427,9 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
                         />
                       )}
                     </div>
-                    {convReservesRight && (
-                      <div
-                        data-tauri-drag-region
-                        className="h-full shrink-0 ws-strip-line"
-                        style={{ width: rightReserve }}
-                      />
-                    )}
+                    <ChromeReserve
+                      width={convReservesRight ? rightReserve : 0}
+                    />
                   </div>
                 )}
                 {/* Pane activation lives on the CONTENT, not the top bar: clicking
@@ -525,23 +516,11 @@ function WorkspaceContent({ children }: { children: React.ReactNode }) {
                   and inactive tabs, arching over the active tab (the active
                   browser-tab-item's `::after`) — same as the conversation column. */}
               <div className="flex h-10 shrink-0 items-stretch bg-muted ws-transparent-bg">
-                {fileReservesLeft && (
-                  <div
-                    data-tauri-drag-region
-                    className="h-full shrink-0 ws-strip-line"
-                    style={{ width: leftReserve }}
-                  />
-                )}
+                <ChromeReserve width={fileReservesLeft ? leftReserve : 0} />
                 <div className="flex min-w-0 flex-1 items-stretch">
                   <FileWorkspaceTabBar />
                 </div>
-                {fileReservesRight && (
-                  <div
-                    data-tauri-drag-region
-                    className="h-full shrink-0 ws-strip-line"
-                    style={{ width: rightReserve }}
-                  />
-                )}
+                <ChromeReserve width={fileReservesRight ? rightReserve : 0} />
               </div>
               {/* Pane activation on the file content + its detail header, not
                   the top bar (see the conversation section). */}

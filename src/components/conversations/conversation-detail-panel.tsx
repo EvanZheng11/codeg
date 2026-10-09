@@ -1,5 +1,7 @@
 "use client"
 
+import { ChromeReserve } from "@/components/layout/chrome-reserve"
+
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   AlertCircle,
@@ -2539,14 +2541,7 @@ function SplitStripCornerReserve({ side }: { side: "left" | "right" }) {
       : !auxOpen && mode === "conversation"
         ? rightChromeReserve(isDesktop() && (isWindows || isLinux), zoomLevel)
         : 0
-  if (width <= 0) return null
-  return (
-    <div
-      data-tauri-drag-region
-      className="h-full shrink-0 ws-strip-line"
-      style={{ width }}
-    />
-  )
+  return <ChromeReserve width={width} />
 }
 
 export function ConversationDetailPanel() {
