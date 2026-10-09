@@ -5394,7 +5394,10 @@ export async function describeAgentOptions(
   /** Config selections to apply on the probe session before reading the
    *  snapshot. Callers pass the model: an agent that derives one option's
    *  choices from another's value (opencode lists `effort` per model) then
-   *  answers for the user's selection instead of its own default model. */
+   *  answers for the user's selection instead of its own default model. An
+   *  applied option still reports the agent's own pick as its `current_value`
+   *  (what it runs when left unset), so a "Default" label keeps naming the
+   *  agent's model rather than the selection. */
   configValues?: Record<string, string> | null
 ): Promise<AgentOptionsSnapshot> {
   // The backend probe has its own 60s timeout (`ConnectionManager::
