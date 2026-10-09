@@ -2239,6 +2239,7 @@ const ConversationTabView = memo(function ConversationTabView({
 
   return (
     <ConversationShell
+      resizableWidth
       getSentHistory={getSentHistory}
       topBanner={
         <>
