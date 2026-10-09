@@ -47,9 +47,12 @@ let browserHandle: DirectoryBrowserHandle | null = null
 function Harness({
   allowCreateFolder = true,
   locale = "en",
+  keepOpen = false,
 }: {
   allowCreateFolder?: boolean
   locale?: "en" | "ar"
+  /** Report the dialog's close requests without acting on them. */
+  keepOpen?: boolean
 }) {
   const [open, setOpen] = useState(true)
   const [value, setValue] = useState("")
@@ -66,7 +69,7 @@ function Harness({
       <Dialog
         open={open}
         onOpenChange={(next) => {
-          setOpen(next)
+          if (!keepOpen) setOpen(next)
           onOpenChange(next)
         }}
       >
@@ -274,6 +277,27 @@ describe("DirectoryBrowser — new folder", () => {
     )
     expect(input).toHaveValue("work")
     expect(latestValue).toBe("/home/me")
+    // And the host gets its confirm back once the answer is in.
+    expect(onBusyChange).toHaveBeenLastCalledWith(false)
+  })
+
+  it("leaves Escape to the input method while the name is being composed", async () => {
+    // Held open: Escape that belongs to the IME goes past the row, as it does
+    // for every field, and only the row's handling is under test here.
+    render(<Harness keepOpen />)
+    const input = await openNewFolderRow()
+    // No in-event IME signal, as on engines that only send composition events.
+    fireEvent.compositionStart(input)
+    fireEvent.keyDown(input, { key: "Escape" })
+    expect(
+      screen.getByRole("textbox", { name: "Folder name" })
+    ).toBeInTheDocument()
+
+    fireEvent.compositionEnd(input)
+    fireEvent.keyDown(input, { key: "Escape" })
+    expect(
+      screen.queryByRole("textbox", { name: "Folder name" })
+    ).not.toBeInTheDocument()
   })
 
   it("does nothing for a blank name", async () => {
@@ -434,6 +458,9 @@ describe("DirectoryBrowser — new folder", () => {
     await screen.findByDisplayValue("/home/me/slow")
     expect(
       screen.getByRole("button", { name: "Go to parent directory" })
+    ).toBeEnabled()
+    expect(
+      screen.getByRole("button", { name: "Go to home directory" })
     ).toBeEnabled()
   })
 
