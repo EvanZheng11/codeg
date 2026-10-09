@@ -1258,27 +1258,30 @@ mod tests {
     }
 
     #[cfg(not(target_os = "windows"))]
-    #[test]
-    fn a_stopped_terminal_keeps_its_output_until_it_is_closed() {
+    #[tokio::test]
+    async fn a_stopped_terminal_keeps_its_output_until_it_is_closed() {
         // The command launcher's Stop ends the process but leaves the tab
         // open, so a reload of that tab must find the output it showed —
         // not "unavailable", which is what forgetting the terminal leaves.
         // The command ignores SIGHUP, so ending it takes the escalation to
         // SIGKILL, and then a wait to reap what that killed.
+        use crate::web::event_bridge::WebEventBroadcaster;
         use std::time::{Duration, Instant};
 
+        let broadcaster = Arc::new(WebEventBroadcaster::new());
+        let mut events = broadcaster.subscribe();
         let manager = TerminalManager::new();
         let id = "stopped-output";
         manager
             .spawn_with_id(
                 sleeping_shell(id, "trap '' HUP; printf 'stop-marker\\n'; exec sleep 30"),
-                EventEmitter::Noop,
+                EventEmitter::test_web_only(broadcaster),
             )
             .expect("spawn");
         let deadline = Instant::now() + Duration::from_secs(10);
         while !manager.snapshot(id).data.contains("stop-marker") {
             assert!(Instant::now() < deadline, "no output to keep");
-            std::thread::sleep(Duration::from_millis(20));
+            tokio::time::sleep(Duration::from_millis(20)).await;
         }
 
         let pid = super::lock_terminals(&manager.terminals)
@@ -1297,7 +1300,19 @@ mod tests {
         );
         // The input is closed only after that, so no Enter and end-of-input
         // reached the process, and no echoed "^D" reached the kept output.
-        std::thread::sleep(Duration::from_millis(300));
+        // The reader reports the exit once it has read all it ever will.
+        let exit_channel = format!("terminal://exit/{id}");
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                match events.recv().await {
+                    Ok(event) if event.channel == exit_channel => return,
+                    Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(err) => panic!("event bus: {err}"),
+                }
+            }
+        })
+        .await
+        .expect("the reader's exit");
         let stopped = manager.snapshot(id);
         assert!(stopped.exists, "the stop forgot the terminal");
         assert!(!stopped.alive);
