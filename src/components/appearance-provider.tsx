@@ -128,8 +128,9 @@ type AppearanceContextValue = {
   chatAnimations: boolean
   setChatAnimations: (on: boolean) => void
   /**
-   * 聊天内容宽度（px），null = 内置默认（48rem）。拖拽手柄与外观设置页共用；
-   * set 会持久化并落到 <html>，preview 只改 DOM（拖拽过程中逐帧用，不触发重渲染）。
+   * 聊天内容宽度（100% 缩放下的 px，落到 CSS 时换成 rem，随缩放变化），
+   * null = 内置默认（48rem）。拖拽手柄与外观设置页共用；set 会持久化并落到
+   * <html>，preview 只改 DOM（拖拽过程中逐帧用，不触发重渲染）。
    */
   chatContentWidth: number | null
   setChatContentWidth: (px: number | null) => void

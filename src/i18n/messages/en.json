@@ -186,7 +186,7 @@
       "sectionDescription": "Maximum width of the conversation column and the composer. You can also drag the edges of the chat column to adjust it.",
       "label": "Content width",
       "default": "Default ({width}px)",
-      "hint": "Very wide values are limited to fit the window.",
+      "hint": "Measured at 100% window zoom and scaled with it. Very wide values are limited to fit the window.",
       "reset": "Reset to default"
     },
     "workspaceBackground": {

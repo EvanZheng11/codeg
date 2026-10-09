@@ -186,7 +186,7 @@
       "sectionDescription": "Largura máxima da coluna de conversa e da caixa de entrada. Você também pode arrastar as bordas do chat para ajustá-la.",
       "label": "Largura do conteúdo",
       "default": "Padrão ({width}px)",
-      "hint": "Valores muito grandes são limitados para caber na janela.",
+      "hint": "Medida com o zoom da janela em 100% e ajustada com ele. Valores muito grandes são limitados para caber na janela.",
       "reset": "Redefinir para o padrão"
     },
     "workspaceBackground": {

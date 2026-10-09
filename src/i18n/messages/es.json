@@ -186,7 +186,7 @@
       "sectionDescription": "Ancho máximo de la columna de conversación y del cuadro de entrada. También puedes arrastrar los bordes del chat para ajustarlo.",
       "label": "Ancho del contenido",
       "default": "Predeterminado ({width}px)",
-      "hint": "Los valores muy grandes se limitan para caber en la ventana.",
+      "hint": "Medido con el zoom de ventana al 100% y escalado con él. Los valores muy grandes se limitan para caber en la ventana.",
       "reset": "Restablecer"
     },
     "workspaceBackground": {

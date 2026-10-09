@@ -24,8 +24,9 @@ export const STORAGE_KEY_WELCOME_QUICK_ACTIONS = "codeg-welcome-quick-actions"
 // .chat-motion-scope 内禁用动画。需预水合，避免会话首屏先播一遍动画。
 export const STORAGE_KEY_CHAT_ANIMATIONS = "codeg-chat-animations"
 
-// 聊天内容宽度（px）。用户拖拽会话区域左右把手后写入；缺省/非法值即回退到
-// 内置默认（48rem）。需预水合，避免会话首屏先按默认宽度排版再跳变。
+// 聊天内容宽度（100% 缩放下的 px，写到 CSS 时换成 rem，随缩放变化）。用户拖拽
+// 会话区域左右把手或在外观设置里调整后写入；缺省/非法值即回退到内置默认
+// （48rem）。需预水合，避免会话首屏先按默认宽度排版再跳变。
 export const STORAGE_KEY_CHAT_CONTENT_WIDTH = "codeg-chat-content-width"
 
 // 字体偏好（界面 / 编辑器 / 终端）。
@@ -119,9 +120,11 @@ const SCRIPT = `
     }
 
     // 聊天内容宽度：非法/缺省则不写变量，样式回退到默认 48rem。
+    // 存的是 100% 缩放下的 px，按 rem 写出（/16），随缩放一起变，与默认值同理
+    // （见 chat-content-width.ts 的 chatContentWidthCss）。
     var chatWidth = Number(localStorage.getItem("${STORAGE_KEY_CHAT_CONTENT_WIDTH}"));
     if (isFinite(chatWidth) && chatWidth > 0 && chatWidth <= 10000) {
-      document.documentElement.style.setProperty("--chat-content-width", chatWidth + "px");
+      document.documentElement.style.setProperty("--chat-content-width", (chatWidth / 16) + "rem");
     }
 
     // 界面字体：预水合写入 --font-sans（普通组件与会话消息区都跟随它）。

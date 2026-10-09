@@ -30,7 +30,11 @@ import {
   useChatAnimationsSetting,
   useChatContentWidth,
 } from "@/hooks/use-appearance"
-import { CHAT_CONTENT_MIN, maxChatContentWidth } from "@/lib/chat-content-width"
+import {
+  CHAT_CONTENT_DEFAULT,
+  CHAT_CONTENT_MIN,
+  chatContentWidthCeiling,
+} from "@/lib/chat-content-width"
 import { cn } from "@/lib/utils"
 import {
   DEFAULT_ZOOM_LEVEL,
@@ -45,21 +49,13 @@ import { FontSettingsSection } from "./font-settings-section"
 import { WorkspaceBackgroundSection } from "./workspace-background-section"
 import { CustomStyleSection } from "./custom-style-section"
 
-/** 内置默认宽度：48rem @ 100% 缩放 */
-const DEFAULT_CHAT_WIDTH_PX = 768
-
 /**
- * 滑块上限：屏幕可用宽度减去两侧留白——主窗口铺满屏幕时聊天列能达到的最宽值。
- * 不用 window.innerWidth：桌面端设置页是独立窗口，量到的是它自己的宽度。
- * 实际显示宽度另由 CSS 按所在列的宽度再封顶（见 chat-content-w）。
+ * 屏幕可用宽度（CSS px），用作聊天宽度滑块上限的依据——主窗口铺满屏幕时聊天列
+ * 能达到的最宽值。不用 window.innerWidth：桌面端设置页是独立窗口，量到的是它自己
+ * 的宽度。实际显示宽度另由 CSS 按所在列的宽度再封顶（见 chat-content-w）。
  */
-function settingsMaxChatWidth(): number {
-  const screenWidth =
-    typeof window === "undefined" ? 0 : (window.screen?.availWidth ?? 0)
-  return Math.max(
-    CHAT_CONTENT_MIN,
-    Math.floor(maxChatContentWidth(screenWidth) / 8) * 8
-  )
+function readScreenWidth(): number {
+  return typeof window === "undefined" ? 0 : (window.screen?.availWidth ?? 0)
 }
 
 type ThemeMode = "system" | "light" | "dark"
@@ -73,7 +69,10 @@ export function AppearanceSettings() {
     useWelcomeQuickActions()
   const { chatAnimations, setChatAnimations } = useChatAnimationsSetting()
   const { chatContentWidth, setChatContentWidth } = useChatContentWidth()
-  const [chatWidthMax] = useState(settingsMaxChatWidth)
+  const [screenWidth] = useState(readScreenWidth)
+  // 宽度以 100% 缩放下的 px 计（随缩放一起放大），所以同一块屏幕在高缩放下能放下
+  // 的宽度更小。
+  const chatWidthMax = chatContentWidthCeiling(screenWidth, zoomLevel / 100)
 
   const resolvedThemeLabel =
     resolvedTheme === "dark"
@@ -316,14 +315,14 @@ export function AppearanceSettings() {
               </span>
               <span className="text-xs tabular-nums text-muted-foreground">
                 {chatContentWidth === null
-                  ? t("chatWidth.default", { width: DEFAULT_CHAT_WIDTH_PX })
+                  ? t("chatWidth.default", { width: CHAT_CONTENT_DEFAULT })
                   : `${chatContentWidth}px`}
               </span>
             </div>
             <Slider
               value={[
                 Math.min(
-                  chatContentWidth ?? DEFAULT_CHAT_WIDTH_PX,
+                  chatContentWidth ?? CHAT_CONTENT_DEFAULT,
                   chatWidthMax
                 ),
               ]}

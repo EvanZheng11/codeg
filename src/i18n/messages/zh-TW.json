@@ -186,7 +186,7 @@
       "sectionDescription": "對話列與輸入框的最大寬度。也可以直接拖曳聊天區域左右兩側的邊緣來調整。",
       "label": "內容寬度",
       "default": "預設（{width}px）",
-      "hint": "過寬的值會依視窗大小自動限制。",
+      "hint": "數值以 100% 視窗縮放計，隨縮放等比變化；過寬的值會依視窗大小自動限制。",
       "reset": "恢復預設"
     },
     "workspaceBackground": {

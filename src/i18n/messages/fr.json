@@ -186,7 +186,7 @@
       "sectionDescription": "Largeur maximale de la colonne de conversation et de la zone de saisie. Vous pouvez aussi faire glisser les bords du chat pour l'ajuster.",
       "label": "Largeur du contenu",
       "default": "Par défaut ({width}px)",
-      "hint": "Les valeurs très grandes sont limitées pour tenir dans la fenêtre.",
+      "hint": "Mesurée avec un zoom de la fenêtre à 100% et mise à l'échelle avec lui. Les valeurs très grandes sont limitées pour tenir dans la fenêtre.",
       "reset": "Réinitialiser"
     },
     "workspaceBackground": {

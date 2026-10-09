@@ -186,7 +186,7 @@
       "sectionDescription": "会话列与输入框的最大宽度。也可以直接拖动聊天区域左右两侧的边缘来调整。",
       "label": "内容宽度",
       "default": "默认（{width}px）",
-      "hint": "过宽的值会按窗口大小自动限制。",
+      "hint": "数值按 100% 窗口缩放计，随缩放等比变化；过宽的值会按窗口大小自动限制。",
       "reset": "恢复默认"
     },
     "workspaceBackground": {

@@ -5,6 +5,7 @@ import { AppearanceContext } from "@/components/appearance-provider"
 import {
   applyChatContentWidth,
   commitChatContentWidth,
+  readChatContentWidth,
 } from "@/lib/chat-content-width"
 import { resolveFontStack } from "@/lib/font-presets"
 
@@ -50,13 +51,13 @@ export function useChatAnimationsEnabled(): boolean {
 }
 
 /**
- * 聊天内容宽度。拖拽手柄与外观设置页共用。在 Provider 之外（测试、独立窗口）
- * 回退为直接读写 lib 层（同一份 localStorage / CSS 变量），不抛错。
+ * 聊天内容宽度（100% 缩放下的 px）。拖拽手柄与外观设置页共用。在 Provider 之外
+ * （测试、独立窗口）回退为直接读写 lib 层（同一份 localStorage / CSS 变量），不抛错。
  */
 export function useChatContentWidth() {
   const ctx = useContext(AppearanceContext)
   return {
-    chatContentWidth: ctx?.chatContentWidth ?? null,
+    chatContentWidth: ctx ? ctx.chatContentWidth : readChatContentWidth(),
     setChatContentWidth: ctx?.setChatContentWidth ?? commitChatContentWidth,
     previewChatContentWidth:
       ctx?.previewChatContentWidth ?? applyChatContentWidth,

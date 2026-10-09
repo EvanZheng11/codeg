@@ -186,7 +186,7 @@
       "sectionDescription": "Maximale Breite der Unterhaltungsspalte und des Eingabefelds. Sie lässt sich auch durch Ziehen der Chat-Ränder anpassen.",
       "label": "Inhaltsbreite",
       "default": "Standard ({width}px)",
-      "hint": "Sehr große Werte werden an das Fenster angepasst.",
+      "hint": "Gemessen bei 100% Fensterzoom und mit dem Zoom skaliert. Sehr große Werte werden an das Fenster angepasst.",
       "reset": "Auf Standard zurücksetzen"
     },
     "workspaceBackground": {

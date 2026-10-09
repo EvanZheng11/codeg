@@ -344,7 +344,7 @@ describe("chat content width", () => {
     mount()
     fireEvent.click(screen.getByText("set"))
     expect(screen.getByTestId("width").textContent).toBe("900")
-    expect(rootVar()).toBe("900px")
+    expect(rootVar()).toBe("56.25rem") // 900px at 100% zoom
     expect(localStorage.getItem(STORAGE_KEY_CHAT_CONTENT_WIDTH)).toBe("900")
 
     fireEvent.click(screen.getByText("reset"))
@@ -356,9 +356,15 @@ describe("chat content width", () => {
   it("preview only touches <html>, not state or storage", () => {
     mount()
     fireEvent.click(screen.getByText("preview"))
-    expect(rootVar()).toBe("1000px")
+    expect(rootVar()).toBe("62.5rem")
     expect(screen.getByTestId("width").textContent).toBe("null")
     expect(localStorage.getItem(STORAGE_KEY_CHAT_CONTENT_WIDTH)).toBeNull()
+  })
+
+  it("reads the stored width outside a provider", () => {
+    localStorage.setItem(STORAGE_KEY_CHAT_CONTENT_WIDTH, "880")
+    render(<WidthProbe />)
+    expect(screen.getByTestId("width").textContent).toBe("880")
   })
 
   it("follows another window's change via the storage event", () => {
@@ -373,6 +379,6 @@ describe("chat content width", () => {
       )
     })
     expect(screen.getByTestId("width").textContent).toBe("1100")
-    expect(rootVar()).toBe("1100px")
+    expect(rootVar()).toBe("68.75rem")
   })
 })
