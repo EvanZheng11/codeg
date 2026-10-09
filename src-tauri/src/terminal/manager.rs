@@ -19,8 +19,12 @@ use crate::web::event_bridge::EventEmitter;
 /// to cover a screenful of `ls -R` or a compile log, not a whole session: this
 /// is a "pick the pane back up where you left it" buffer, not a transcript.
 const SCROLLBACK_MAX_CHARS: usize = 128 * 1024;
-const CANCELLED_SPAWN_TTL: Duration = Duration::from_secs(30);
-const CANCELLED_SPAWN_MAX_COUNT: usize = 128;
+/// How long a close of a terminal not yet launched is remembered, so its
+/// launch is refused when it lands. Marks only ever name random ids, which
+/// are never reused, so keeping one too long refuses nothing it should not;
+/// letting one go too soon lets a closed tab's command run after all. This
+/// outlasts any request a page can still have on its way here.
+const CANCELLED_SPAWN_TTL: Duration = Duration::from_secs(10 * 60);
 
 /// Recent output of one terminal, kept so a viewer that mounts after the spawn
 /// (or re-mounts after its host view was unmounted — a canvas terminal card
@@ -725,9 +729,10 @@ impl TerminalManager {
             }
         }
         // A close (or stop) can overtake an in-flight spawn request, or arrive
-        // just before it. Remember only random terminal IDs, for a short bounded
-        // interval. The later insert consumes this reservation atomically under
-        // the terminal map lock; ordinary view unmount never calls kill.
+        // just before it. Remember only random terminal IDs, for
+        // `CANCELLED_SPAWN_TTL`; no other close can push the mark out early.
+        // The later insert consumes it atomically under the terminal map
+        // lock; ordinary view unmount never calls kill.
         if uuid::Uuid::parse_str(terminal_id).is_ok() {
             let mut pending = self
                 .cancelled_spawns
@@ -735,15 +740,6 @@ impl TerminalManager {
                 .unwrap_or_else(|p| p.into_inner());
             let now = Instant::now();
             pending.retain(|_, time| now.duration_since(*time) < CANCELLED_SPAWN_TTL);
-            if pending.len() >= CANCELLED_SPAWN_MAX_COUNT {
-                if let Some(oldest) = pending
-                    .iter()
-                    .min_by_key(|(_, time)| *time)
-                    .map(|(id, _)| id.clone())
-                {
-                    pending.remove(&oldest);
-                }
-            }
             pending.insert(terminal_id.to_string(), now);
             return Ok(());
         }
@@ -1250,13 +1246,15 @@ mod tests {
         // The command launcher's Stop ends the process but leaves the tab
         // open, so a reload of that tab must find the output it showed —
         // not "unavailable", which is what forgetting the terminal leaves.
+        // The command ignores SIGHUP, so ending it takes the escalation to
+        // SIGKILL, and then a wait to reap what that killed.
         use std::time::{Duration, Instant};
 
         let manager = TerminalManager::new();
         let id = "stopped-output";
         manager
             .spawn_with_id(
-                sleeping_shell(id, "printf 'stop-marker\\n'; sleep 30"),
+                sleeping_shell(id, "trap '' HUP; printf 'stop-marker\\n'; exec sleep 30"),
                 EventEmitter::Noop,
             )
             .expect("spawn");
@@ -1266,7 +1264,20 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
 
+        let pid = super::lock_terminals(&manager.terminals)
+            .get(id)
+            .and_then(|instance| instance._child.process_id())
+            .expect("child pid") as libc::pid_t;
+
         manager.stop(id).expect("stop");
+        // Ended and reaped by the time stop returns: no longer a child of
+        // ours at all. Still running, waitpid would answer 0; a zombie, its pid.
+        let waited = unsafe { libc::waitpid(pid, std::ptr::null_mut(), libc::WNOHANG) };
+        assert_eq!(
+            (waited, std::io::Error::last_os_error().raw_os_error()),
+            (-1, Some(libc::ECHILD)),
+            "stop left its process running or unreaped"
+        );
         let stopped = manager.snapshot(id);
         assert!(stopped.exists, "the stop forgot the terminal");
         assert!(!stopped.alive);
@@ -1277,6 +1288,26 @@ mod tests {
 
         manager.kill(id).expect("close");
         assert!(!manager.snapshot(id).exists);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn a_closed_launch_stays_refused_however_many_others_close() {
+        // Every close of a terminal not yet launched leaves a mark; none of
+        // them may push another out before its time, or that tab's command
+        // runs after all when its launch finally lands.
+        let manager = TerminalManager::new();
+        let first = uuid::Uuid::new_v4().to_string();
+        manager.kill(&first).expect("close before launch");
+        for _ in 0..500 {
+            manager
+                .kill(&uuid::Uuid::new_v4().to_string())
+                .expect("other closes");
+        }
+        assert!(manager
+            .spawn_with_id(sleeping_shell(&first, "sleep 30"), EventEmitter::Noop)
+            .is_err());
+        assert!(!manager.snapshot(&first).exists);
     }
 
     #[cfg(not(target_os = "windows"))]
