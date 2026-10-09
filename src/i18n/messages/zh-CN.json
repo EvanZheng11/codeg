@@ -176,6 +176,11 @@
       "sectionDescription": "新会话页面输入框上方显示的「代码开发 / 日常办公」快捷卡片区域。",
       "showQuickActions": "在新会话页面显示"
     },
+    "chatAnimations": {
+      "sectionTitle": "聊天区域动画",
+      "sectionDescription": "会话区域内的折叠/展开、工具调用、工作状态等动画，以及平滑滚动。关闭后界面立即更新、不再有过渡动画；加载转圈图标仍会旋转。",
+      "enable": "启用聊天区域动画"
+    },
     "workspaceBackground": {
       "sectionTitle": "工作区背景",
       "sectionDescription": "在整个工作区背后显示一张图片。侧栏与面板会变半透明并磨砂让图片透出，遮罩保证文字可读。",

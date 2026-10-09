@@ -1,6 +1,6 @@
 "use client"
 
-import { LayoutGrid, Monitor, Moon, Sun, Type } from "lucide-react"
+import { LayoutGrid, Monitor, Moon, Sparkles, Sun, Type } from "lucide-react"
 import { useTranslations } from "next-intl"
 import { useTheme } from "next-themes"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -16,6 +16,7 @@ import {
   useThemeColor,
   useZoomLevel,
   useWelcomeQuickActions,
+  useChatAnimationsSetting,
 } from "@/hooks/use-appearance"
 import { cn } from "@/lib/utils"
 import {
@@ -40,6 +41,7 @@ export function AppearanceSettings() {
   const { zoomLevel, setZoomLevel } = useZoomLevel()
   const { showWelcomeQuickActions, setShowWelcomeQuickActions } =
     useWelcomeQuickActions()
+  const { chatAnimations, setChatAnimations } = useChatAnimationsSetting()
 
   const resolvedThemeLabel =
     resolvedTheme === "dark"
@@ -234,6 +236,30 @@ export function AppearanceSettings() {
             />
             <span className="text-xs text-muted-foreground">
               {t("welcomePanel.showQuickActions")}
+            </span>
+          </label>
+        </section>
+
+        {/* ===== Chat animations ===== */}
+        <section className="rounded-xl border bg-card p-4 space-y-4">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold">
+              {t("chatAnimations.sectionTitle")}
+            </h2>
+          </div>
+
+          <p className="text-xs text-muted-foreground leading-5">
+            {t("chatAnimations.sectionDescription")}
+          </p>
+
+          <label className="flex items-center gap-2">
+            <Switch
+              checked={chatAnimations}
+              onCheckedChange={setChatAnimations}
+            />
+            <span className="text-xs text-muted-foreground">
+              {t("chatAnimations.enable")}
             </span>
           </label>
         </section>

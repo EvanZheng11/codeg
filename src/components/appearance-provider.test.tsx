@@ -2,8 +2,13 @@ import { act, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { AppearanceProvider } from "./appearance-provider"
-import { useCustomStyle } from "@/hooks/use-appearance"
 import {
+  useChatAnimationsEnabled,
+  useChatAnimationsSetting,
+  useCustomStyle,
+} from "@/hooks/use-appearance"
+import {
+  STORAGE_KEY_CHAT_ANIMATIONS,
   STORAGE_KEY_CUSTOM_THEME,
   STORAGE_KEY_ZOOM_LEVEL,
 } from "@/lib/appearance-script"
@@ -231,3 +236,68 @@ describe("window zoom keys", () => {
     expect(currentZoomPx()).toBe("16px")
   })
 })
+
+describe("chat animations switch", () => {
+  function ChatAnimationsProbe() {
+    const { setChatAnimations } = useChatAnimationsSetting()
+    const enabled = useChatAnimationsEnabled()
+    return (
+      <>
+        <span data-testid="enabled">{String(enabled)}</span>
+        <button onClick={() => setChatAnimations(!enabled)}>toggle</button>
+      </>
+    )
+  }
+
+  const html = () => document.documentElement
+
+  beforeEach(() => {
+    html().removeAttribute("data-chat-animations")
+  })
+
+  it("is on by default and leaves <html> unmarked", () => {
+    render(
+      <AppearanceProvider>
+        <ChatAnimationsProbe />
+      </AppearanceProvider>
+    )
+    expect(screen.getByTestId("enabled").textContent).toBe("true")
+    expect(html().hasAttribute("data-chat-animations")).toBe(false)
+  })
+
+  it("marks <html> and persists when turned off, and clears both when back on", () => {
+    render(
+      <AppearanceProvider>
+        <ChatAnimationsProbe />
+      </AppearanceProvider>
+    )
+    fireEvent.click(screen.getByText("toggle"))
+    expect(screen.getByTestId("enabled").textContent).toBe("false")
+    expect(html().getAttribute("data-chat-animations")).toBe("off")
+    expect(localStorage.getItem(STORAGE_KEY_CHAT_ANIMATIONS)).toBe("0")
+
+    fireEvent.click(screen.getByText("toggle"))
+    expect(html().hasAttribute("data-chat-animations")).toBe(false)
+    expect(localStorage.getItem(STORAGE_KEY_CHAT_ANIMATIONS)).toBe("1")
+  })
+
+  it("restores a stored off state on mount", () => {
+    localStorage.setItem(STORAGE_KEY_CHAT_ANIMATIONS, "0")
+    render(
+      <AppearanceProvider>
+        <ChatAnimationsProbe />
+      </AppearanceProvider>
+    )
+    expect(screen.getByTestId("enabled").textContent).toBe("false")
+    expect(html().getAttribute("data-chat-animations")).toBe("off")
+  })
+
+  it("falls back to enabled outside a provider", () => {
+    render(<ChatAnimationsProbeOutside />)
+    expect(screen.getByTestId("outside").textContent).toBe("true")
+  })
+})
+
+function ChatAnimationsProbeOutside() {
+  return <span data-testid="outside">{String(useChatAnimationsEnabled())}</span>
+}

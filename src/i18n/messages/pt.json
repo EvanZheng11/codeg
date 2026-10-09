@@ -176,6 +176,11 @@
       "sectionDescription": "Os cartões de atalho «Desenvolvimento / Escritório» exibidos acima do campo de entrada na página de nova conversa.",
       "showQuickActions": "Mostrar na página de nova conversa"
     },
+    "chatAnimations": {
+      "sectionTitle": "Animações do chat",
+      "sectionDescription": "Animações de recolher/expandir, chamadas de ferramentas e estado de trabalho na área de conversa, além da rolagem suave. Desative para atualizações instantâneas. Os indicadores de carregamento continuam girando.",
+      "enable": "Ativar as animações do chat"
+    },
     "workspaceBackground": {
       "sectionTitle": "Plano de fundo da área de trabalho",
       "sectionDescription": "Mostra uma imagem atrás de toda a área de trabalho. A barra lateral e os painéis ficam translúcidos e foscos para deixar a imagem transparecer, e uma máscara mantém o texto legível.",

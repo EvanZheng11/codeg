@@ -176,6 +176,11 @@
       "sectionDescription": "The Code Development / Office Work shortcut cards shown above the composer on the new conversation page.",
       "showQuickActions": "Show on the new conversation page"
     },
+    "chatAnimations": {
+      "sectionTitle": "Chat animations",
+      "sectionDescription": "Entrance, expand/collapse, tool-call and working-status animations in the conversation area, plus smooth scrolling. Turn off for instant, motion-free updates. Spinners keep rotating.",
+      "enable": "Enable chat animations"
+    },
     "workspaceBackground": {
       "sectionTitle": "Workspace background",
       "sectionDescription": "Show a picture behind the whole workspace. Sidebar and panels turn translucent and frosted so the image shows through, and a mask keeps text readable.",

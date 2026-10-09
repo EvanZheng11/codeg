@@ -31,6 +31,20 @@ export function useWelcomeQuickActions() {
   return { showWelcomeQuickActions, setShowWelcomeQuickActions }
 }
 
+/** 聊天区域动画开关（设置页用）。 */
+export function useChatAnimationsSetting() {
+  const { chatAnimations, setChatAnimations } = useAppearance()
+  return { chatAnimations, setChatAnimations }
+}
+
+/**
+ * 聊天区域是否播放动画。供 JS 驱动的动画（Shimmer、平滑滚动）读取；
+ * 在 Provider 之外（测试、独立窗口）回退为开启，不抛错。
+ */
+export function useChatAnimationsEnabled(): boolean {
+  return useContext(AppearanceContext)?.chatAnimations ?? true
+}
+
 /** 界面字体（普通组件）。stack 已解析，可直接用于 style 或 CSS 变量。 */
 export function useUiFont() {
   const { uiFont, setUiFont } = useAppearance()

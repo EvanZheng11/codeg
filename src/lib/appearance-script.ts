@@ -19,6 +19,11 @@ export const STORAGE_KEY_ZOOM_LEVEL = "codeg-zoom-level"
 // 缺省即回退为开启（保持历史行为）；仅在欢迎态客户端渲染，无需预水合。
 export const STORAGE_KEY_WELCOME_QUICK_ACTIONS = "codeg-welcome-quick-actions"
 
+// 聊天区域动画（新消息滚动、折叠展开、工具调用、工作状态等）总开关。
+// 缺省即开启；"0" 时给 <html> 打 data-chat-animations="off"，由 globals.css 在
+// .chat-motion-scope 内禁用动画。需预水合，避免会话首屏先播一遍动画。
+export const STORAGE_KEY_CHAT_ANIMATIONS = "codeg-chat-animations"
+
 // 字体偏好（界面 / 编辑器 / 终端）。
 // 只有界面字体需要 *_STACK（已解析的 CSS font-family 栈），供 inline 脚本零依赖地
 // 预水合写入 --font-sans；编辑器/终端字体只走各自的 Monaco/xterm 选项，水合后才挂载，
@@ -103,6 +108,11 @@ const SCRIPT = `
     var storedZoom = parseInt(localStorage.getItem("${STORAGE_KEY_ZOOM_LEVEL}") || "", 10);
     var zoom = VALID_ZOOMS.indexOf(storedZoom) >= 0 ? storedZoom : 100;
     document.documentElement.style.fontSize = (16 * zoom / 100) + "px";
+
+    // 聊天区域动画开关：仅显式关闭（"0"）时打属性，缺省保持开启。
+    if (localStorage.getItem("${STORAGE_KEY_CHAT_ANIMATIONS}") === "0") {
+      document.documentElement.setAttribute("data-chat-animations", "off");
+    }
 
     // 界面字体：预水合写入 --font-sans（普通组件与会话消息区都跟随它）。
     // stack 只是「显式选择」的缓存，不是偏好本身：仅当存在显式 id（codeg-ui-font）

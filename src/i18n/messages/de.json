@@ -176,6 +176,11 @@
       "sectionDescription": "Die Shortcut-Karten „Code-Entwicklung / Büroarbeit“ über dem Eingabefeld auf der Seite für eine neue Konversation.",
       "showQuickActions": "Auf der Seite für neue Konversationen anzeigen"
     },
+    "chatAnimations": {
+      "sectionTitle": "Chat-Animationen",
+      "sectionDescription": "Animationen für Ein-/Ausklappen, Tool-Aufrufe und Arbeitsstatus im Unterhaltungsbereich sowie sanftes Scrollen. Wenn deaktiviert, werden Änderungen sofort angezeigt. Ladeanzeigen drehen sich weiterhin.",
+      "enable": "Chat-Animationen aktivieren"
+    },
     "workspaceBackground": {
       "sectionTitle": "Arbeitsbereich-Hintergrund",
       "sectionDescription": "Zeigt ein Bild hinter dem gesamten Arbeitsbereich. Seitenleiste und Panels werden durchscheinend und mattiert, sodass das Bild durchscheint, und eine Maske sorgt für lesbaren Text.",
