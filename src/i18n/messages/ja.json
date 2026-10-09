@@ -3572,6 +3572,7 @@
         "nameLabel": "名前:",
         "agentPromptLabel": "プロンプト",
         "agentModelLabel": "モデル",
+        "agentEffortLabel": "思考の強度",
         "agentRunning": "実行中...",
         "agentLiveTranscript": "ライブアクティビティ",
         "agentProgressTools": "{count} 件のツール呼び出し",

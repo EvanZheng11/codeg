@@ -3572,6 +3572,7 @@
         "nameLabel": "Name:",
         "agentPromptLabel": "Prompt",
         "agentModelLabel": "Model",
+        "agentEffortLabel": "Effort",
         "agentRunning": "Running...",
         "agentLiveTranscript": "Live activity",
         "agentProgressTools": "{count} tool calls",

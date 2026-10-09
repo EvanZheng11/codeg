@@ -3572,6 +3572,7 @@
         "nameLabel": "الاسم:",
         "agentPromptLabel": "المطالبة",
         "agentModelLabel": "النموذج",
+        "agentEffortLabel": "مستوى التفكير",
         "agentRunning": "قيد التشغيل...",
         "agentLiveTranscript": "النشاط المباشر",
         "agentProgressTools": "{count} استدعاءات أدوات",

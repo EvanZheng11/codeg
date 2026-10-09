@@ -28273,6 +28273,48 @@ mod tests {
         }
     }
 
+    /// A Grep sent with `file_path` (CLI 2.1.292 runs it as `path`) reaches the
+    /// search card as `path`. Under the AIR contract the update that carries
+    /// the input names no tool of its own, so the tool name has to come from
+    /// the opening frame through the `_meta` ledger.
+    #[tokio::test]
+    async fn claude_grep_file_path_reaches_the_card_as_path() {
+        let mut cache = ToolCallOutputCache::default();
+        let mut cb = CodeBuddyLiveState::default();
+        pi_emit(
+            AgentType::ClaudeCode,
+            &mut cache,
+            &mut cb,
+            serde_json::json!({
+                "sessionUpdate": "tool_call",
+                "toolCallId": "toolu_g",
+                "title": "grep",
+                "kind": "search",
+                "status": "pending",
+                "_meta": {"claudeCode": {"toolName": "Grep"}},
+            }),
+        )
+        .await;
+        let (_, raw_input, _, _) = pi_emit(
+            AgentType::ClaudeCode,
+            &mut cache,
+            &mut cb,
+            serde_json::json!({
+                "sessionUpdate": "tool_call_update",
+                "toolCallId": "toolu_g",
+                "title": "grep \"needle\" /w/a.txt",
+                "rawInput": {"pattern": "needle", "file_path": "/w/a.txt", "output_mode": "content"},
+            }),
+        )
+        .await;
+        let input: serde_json::Value =
+            serde_json::from_str(raw_input.as_deref().expect("raw_input")).unwrap();
+        assert_eq!(
+            input,
+            serde_json::json!({"pattern": "needle", "path": "/w/a.txt", "output_mode": "content"})
+        );
+    }
+
     /// The renames are keyed on the claude tool's NAME: Grep's own `path`
     /// argument is not a Write's `file_path`, and another agent's `_meta` that
     /// happens to use the same key is not claude's.

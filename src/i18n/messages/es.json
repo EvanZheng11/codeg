@@ -3572,6 +3572,7 @@
         "nameLabel": "Nombre:",
         "agentPromptLabel": "Instrucción",
         "agentModelLabel": "Modelo",
+        "agentEffortLabel": "Esfuerzo",
         "agentRunning": "Ejecutando...",
         "agentLiveTranscript": "Actividad en vivo",
         "agentProgressTools": "{count} llamadas a herramientas",

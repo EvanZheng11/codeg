@@ -3572,6 +3572,7 @@
         "nameLabel": "名称：",
         "agentPromptLabel": "提示词",
         "agentModelLabel": "模型",
+        "agentEffortLabel": "思考强度",
         "agentRunning": "运行中...",
         "agentLiveTranscript": "实时活动",
         "agentProgressTools": "{count} 次工具调用",
