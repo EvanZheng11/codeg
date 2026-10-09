@@ -133,7 +133,8 @@ async fn help_probe(bin: &Path) -> Option<bool> {
 /// tag its archive was downloaded from. A binary found on PATH comes without
 /// one, so its `--version` is read through the same cached probe the agent
 /// list already runs on it, which usually makes this free. A release version
-/// settles the question outright; anything else asks the binary for its
+/// below 2.0 settles the question outright; anything else — a preview build,
+/// a release from 2.0 on, no usable version — asks the binary for its
 /// `acp --help`.
 ///
 /// When even that fails, the launch keeps the bare argv. That is exactly how
@@ -155,9 +156,12 @@ pub(crate) async fn listen_args(
     match verdict {
         Some(true) => LISTEN_ARGS,
         Some(false) => {
-            // Nothing lost: builds without the flags run no HTTP server.
+            // Nothing lost: no build without the flags has a listener the
+            // config can move. Before 1.0.43 `acp` starts no HTTP server, and
+            // 2.x puts its private `serve --stdio` child on an automatic
+            // loopback port.
             tracing::info!(
-                "[ACP][OpenCode] {} (version {}) predates `acp --port/--hostname`; launching without them",
+                "[ACP][OpenCode] {} (version {}) does not accept `acp --port/--hostname`; launching without them",
                 bin.display(),
                 version.unwrap_or("unknown"),
             );
