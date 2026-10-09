@@ -742,6 +742,10 @@ mod tests {
         state.mark_open(remote(1));
         assert_eq!(state.activation_target(|_| true), Some(remote(1)));
         assert_eq!(state.snapshot(), vec![remote(1)]);
+        // Still restoring, but nothing is left pending to wait for: with the
+        // restored window closed again, local is the only workspace left.
+        state.mark_closed(remote(1));
+        assert_eq!(state.activation_target(|_| true), Some(LOCAL));
     }
 
     #[test]
