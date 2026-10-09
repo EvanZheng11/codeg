@@ -425,7 +425,8 @@ pub fn on_window_event(window: &tauri::Window, event: &tauri::WindowEvent) {
 
 /// Bring the most recently used workspace forward on Dock activation. A
 /// hidden/minimized remote still counts as open. Only fall back to local when
-/// no workspace remains, never while a remote-only launch is restoring.
+/// no workspace remains, never while a remote-only launch still has windows
+/// to bring back.
 pub fn activate_workspace(app: &AppHandle) {
     let target = match app.try_state::<WorkspaceWindowSession>() {
         Some(session) => session
