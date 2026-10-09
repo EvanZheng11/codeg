@@ -21,7 +21,11 @@ const READY_TIMEOUT_MS = 5_000
 /// the wire format exactly; we re-export `__ready__` via `WS_READY_CHANNEL`
 /// to keep the shared-constants invariant with `WebTransport`.
 const WS_DISCONNECTED_CHANNEL = "__disconnected__"
+/// The server refused the token on the socket's handshake (HTTP 401).
 const WS_UNAUTHORIZED_CHANNEL = "__unauthorized__"
+/// The proxy stopped retrying after repeated failures that said nothing
+/// about the token. Recoverable with `reconnectNow()`.
+const WS_RETRIES_EXHAUSTED_CHANNEL = "__retries_exhausted__"
 
 // Two wire shapes flow on the same `remote-ws-event-{id}` Tauri event:
 //   1. Legacy `{channel, payload}` envelopes from the WebEventBroadcaster
@@ -507,14 +511,19 @@ export class RemoteDesktopTransport implements Transport {
       this.resetReady()
       return
     }
-    if (channel === WS_UNAUTHORIZED_CHANNEL) {
-      // Older proxies also send this after repeated network failures.
-      // It means retries stopped, but does not prove credentials expired.
+    if (
+      channel === WS_RETRIES_EXHAUSTED_CHANNEL ||
+      channel === WS_UNAUTHORIZED_CHANNEL
+    ) {
+      // The proxy has stopped and dropped this window's subscription:
+      // either it gave up after network failures, which the user may retry
+      // in place, or the server refused the token, which is the same
+      // expiry an HTTP 401 reports.
       this.recoveryNeeded = true
       if (this.wsOpen) this.resetReady()
       this.wsOpen = false
       this.setConnectionState("disconnected")
-      this.config.onUnauthorized?.("websocket")
+      if (channel === WS_UNAUTHORIZED_CHANNEL) this.config.onUnauthorized?.()
       return
     }
     const handlers = this.handlers.get(channel)

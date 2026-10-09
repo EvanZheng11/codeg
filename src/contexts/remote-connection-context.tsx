@@ -110,14 +110,10 @@ export function RemoteConnectionGate({ children }: { children: ReactNode }) {
           baseUrl: next.base_url,
           token: next.token,
           windowInstanceId: remoteWindowId,
-          onUnauthorized: (source) => {
-            // Legacy desktop proxies also stop with this WS signal after
-            // network failures. Let the health indicator offer reconnect;
-            // only a confirmed HTTP 401 should claim credentials expired.
-            if (source !== "websocket") {
-              setState((prev) => ({ ...prev, expired: true }))
-            }
-          },
+          // Only a refused token. A socket that stopped retrying keeps the
+          // workspace mounted; `RemoteConnectionStatus` offers the retry.
+          onUnauthorized: () =>
+            setState((prev) => ({ ...prev, expired: true })),
         })
         setState({
           connection: next,

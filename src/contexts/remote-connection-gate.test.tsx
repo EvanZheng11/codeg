@@ -65,20 +65,12 @@ async function renderGate() {
 }
 
 describe("RemoteConnectionGate failure recovery", () => {
-  it("keeps an offline restored workspace mounted after an ambiguous WS terminal failure", async () => {
+  // A socket that merely ran out of retries never reaches the gate: the
+  // transport keeps that to its own state, which the status pill shows.
+  it("shows credential expiry once the transport reports a refused token", async () => {
     const config = await renderGate()
-    act(() => config.onUnauthorized?.("websocket"))
-
-    expect(screen.getByText("Workspace stays open")).toBeInTheDocument()
-    expect(screen.getByText("Remote status")).toBeInTheDocument()
-    expect(
-      mocks.status.mock.calls[mocks.status.mock.calls.length - 1][0].transport
-    ).toBe(mocks.transport)
     expect(screen.queryByText(/expired/i)).not.toBeInTheDocument()
-  })
 
-  it("still shows credential expiry for a confirmed HTTP authentication failure", async () => {
-    const config = await renderGate()
     act(() => config.onUnauthorized?.())
 
     expect(screen.queryByText("Workspace stays open")).not.toBeInTheDocument()

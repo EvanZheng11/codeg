@@ -44,7 +44,7 @@ use tokio_tungstenite::tungstenite::{
     client::IntoClientRequest,
     handshake::client::Request,
     http::{HeaderMap, HeaderValue},
-    Message,
+    Error as WsError, Message,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -87,8 +87,9 @@ const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 /// longest today is 70s for `describeAgentOptions`).
 const HTTP_TIMEOUT_MAX: Duration = Duration::from_secs(600);
 
-/// Number of consecutive WS connect failures before we give up and emit
-/// `__unauthorized__`. Matches the JS-side `wsFailCount >= 3` threshold.
+/// Number of consecutive WS failures before we stop retrying and emit
+/// `__retries_exhausted__`. A handshake the server answers with 401 stops the
+/// task at once instead, with `__unauthorized__`.
 const WS_RECONNECT_FAIL_THRESHOLD: u32 = 3;
 
 /// Exponential backoff bounds for WS reconnect. 1s/2s/4s/8s/16s/32s.
@@ -105,11 +106,16 @@ const WS_EVENTS_PATH: &str = "/ws/events";
 /// Internal Tauri-event channels emitted by this proxy. The frontend
 /// `RemoteDesktopTransport` reserves these names. MUST match the
 /// equivalents in `src/lib/transport/constants.ts` and the
-/// `__disconnected__` / `__unauthorized__` literals in
-/// `src/lib/transport/remote-desktop-transport.ts`.
+/// `__disconnected__` / `__unauthorized__` / `__retries_exhausted__`
+/// literals in `src/lib/transport/remote-desktop-transport.ts`.
 const WS_READY_CHANNEL: &str = "__ready__";
 const WS_DISCONNECTED_CHANNEL: &str = "__disconnected__";
+/// The server refused the token on the handshake (HTTP 401). Definitive, like
+/// a 401 on an HTTP call: the frontend reports the connection as expired.
 const WS_UNAUTHORIZED_CHANNEL: &str = "__unauthorized__";
+/// The task stopped after `WS_RECONNECT_FAIL_THRESHOLD` failures in a row
+/// that said nothing about the token. The frontend offers a manual retry.
+const WS_RETRIES_EXHAUSTED_CHANNEL: &str = "__retries_exhausted__";
 
 /// One entry per active remote `connection_id` with at least one webview
 /// subscribed.
@@ -1736,13 +1742,16 @@ pub async fn remote_ws_unsubscribe(
 ///      envelopes.
 ///   4. On disconnect, emit `__disconnected__`, increment fail count, back
 ///      off, retry.
-///   5. After `WS_RECONNECT_FAIL_THRESHOLD` consecutive failures, emit
-///      `__unauthorized__` and exit.
+///   5. A handshake answered with HTTP 401 exits at once with
+///      `__unauthorized__`: retrying a refused token cannot succeed. After
+///      `WS_RECONNECT_FAIL_THRESHOLD` consecutive other failures, exit with
+///      `__retries_exhausted__`.
 ///   6. At any point, a `shutdown_tx.send(true)` causes graceful exit.
 ///
 /// On exit (any path), the task removes its entry from `proxy.tasks` —
 /// but only if the entry still matches its own `Arc`, so a racy
-/// resubscribe that already replaced the entry isn't clobbered.
+/// resubscribe that already replaced the entry isn't clobbered. The
+/// terminal channel of step 5 is sent only once the entry is gone.
 // `app`/`proxy`/`connection_id`/`base_url`/`token`/`entry`/`shutdown_rx`/
 // `outbound_rx` are all distinct concerns the task needs; bundling into a
 // single struct would just spread the field definitions to a different
@@ -1762,7 +1771,9 @@ async fn run_ws_task(
     let event_name = format!("remote-ws-event-{connection_id}");
     let ws_url = http_url_to_ws_url(&base_url, WS_EVENTS_PATH);
     let mut fail_count: u32 = 0;
-    let mut terminal_failure = false;
+    // Why the task stopped for good, as the channel its subscribers are told
+    // on. `None` for a shutdown: nobody is left to tell.
+    let mut terminal: Option<&'static str> = None;
 
     'reconnect: loop {
         if *shutdown_rx.borrow() {
@@ -1782,11 +1793,18 @@ async fn run_ws_task(
 
         let mut socket = match connect_result {
             Ok(s) => s,
+            Err(WsConnectError::Unauthorized) => {
+                tracing::warn!(
+                    "[RemoteProxy] WS handshake for connection {connection_id} was refused with HTTP 401"
+                );
+                terminal = Some(WS_UNAUTHORIZED_CHANNEL);
+                break;
+            }
             Err(err) => {
                 tracing::error!("[RemoteProxy] WS connect failed for connection {connection_id}: {err}");
                 fail_count += 1;
                 if fail_count >= WS_RECONNECT_FAIL_THRESHOLD {
-                    terminal_failure = true;
+                    terminal = Some(WS_RETRIES_EXHAUSTED_CHANNEL);
                     break;
                 }
                 if backoff_sleep(&mut shutdown_rx, fail_count).await {
@@ -1861,7 +1879,7 @@ async fn run_ws_task(
         emit_internal(&app, &entry, &event_name, WS_DISCONNECTED_CHANNEL).await;
         fail_count += 1;
         if fail_count >= WS_RECONNECT_FAIL_THRESHOLD {
-            terminal_failure = true;
+            terminal = Some(WS_RETRIES_EXHAUSTED_CHANNEL);
             break;
         }
         if backoff_sleep(&mut shutdown_rx, fail_count).await {
@@ -1874,8 +1892,8 @@ async fn run_ws_task(
     // Remove before notifying the frontend that retries stopped. A manual
     // in-place retry must create a live task, never rejoin this dying entry.
     remove_finished_ws_task(&proxy, connection_id, &entry, || async {
-        if terminal_failure {
-            emit_internal(&app, &entry, &event_name, WS_UNAUTHORIZED_CHANNEL).await;
+        if let Some(channel) = terminal {
+            emit_internal(&app, &entry, &event_name, channel).await;
         }
     })
     .await;
@@ -2008,13 +2026,36 @@ pub(crate) async fn connect_with_subprotocol_auth(
     custom_headers: &HeaderMap,
 ) -> Result<
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>,
-    String,
+    WsConnectError,
 > {
-    let request = ws_request_with_subprotocol_auth(ws_url, protocol, token, custom_headers)?;
-    let (stream, _resp) = tokio_tungstenite::connect_async(request)
-        .await
-        .map_err(|e| format!("connect_async: {e}"))?;
-    Ok(stream)
+    let request = ws_request_with_subprotocol_auth(ws_url, protocol, token, custom_headers)
+        .map_err(WsConnectError::Other)?;
+    match tokio_tungstenite::connect_async(request).await {
+        Ok((stream, _resp)) => Ok(stream),
+        // The auth middleware's answer to a token it does not accept.
+        Err(WsError::Http(response)) if response.status().as_u16() == 401 => {
+            Err(WsConnectError::Unauthorized)
+        }
+        Err(err) => Err(WsConnectError::Other(format!("connect_async: {err}"))),
+    }
+}
+
+/// Why [`connect_with_subprotocol_auth`] failed. Only a 401 says anything
+/// about the credentials. Everything else (refused, unreachable, TLS, any
+/// other status, a proxy in the way) is a server that may answer again.
+#[derive(Debug)]
+pub(crate) enum WsConnectError {
+    Unauthorized,
+    Other(String),
+}
+
+impl std::fmt::Display for WsConnectError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unauthorized => f.write_str("the server refused the token (HTTP 401)"),
+            Self::Other(detail) => f.write_str(detail),
+        }
+    }
 }
 
 /// The handshake request `connect_with_subprotocol_auth` sends, for a caller
@@ -2125,6 +2166,58 @@ mod tests {
         assert!(remove_finished_ws_task(&proxy, 1, &finished, || async {}).await);
         let tasks = proxy.tasks.lock().await;
         assert!(Arc::ptr_eq(tasks.get(&2).unwrap(), &other));
+    }
+
+    /// Only a 401 answer to the handshake counts as a refused token, which
+    /// `run_ws_task` reports at once with `__unauthorized__`. Any other
+    /// status, or no server at all, is a failure it retries.
+    #[tokio::test]
+    async fn a_refused_token_is_told_apart_from_a_server_that_does_not_answer() {
+        async fn connect(addr: std::net::SocketAddr) -> Result<(), WsConnectError> {
+            connect_with_subprotocol_auth(
+                &format!("ws://{addr}{WS_EVENTS_PATH}"),
+                WS_EVENT_PROTOCOL,
+                "stale-token",
+                &HeaderMap::new(),
+            )
+            .await
+            .map(|_| ())
+        }
+        fn answer(status: &str) -> String {
+            format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+        }
+
+        let refusing = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let refusing_addr = refusing.local_addr().unwrap();
+        let refusing_server =
+            tokio::spawn(serve_sequence(refusing, vec![answer("401 Unauthorized")]));
+        assert!(matches!(
+            connect(refusing_addr).await,
+            Err(WsConnectError::Unauthorized)
+        ));
+        let handshake = &refusing_server.await.unwrap()[0];
+        assert!(handshake.starts_with(&format!("GET {WS_EVENTS_PATH} ")));
+
+        let unavailable = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let unavailable_addr = unavailable.local_addr().unwrap();
+        tokio::spawn(serve_sequence(
+            unavailable,
+            vec![answer("503 Service Unavailable")],
+        ));
+        assert!(matches!(
+            connect(unavailable_addr).await,
+            Err(WsConnectError::Other(_))
+        ));
+
+        let closed_addr = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        assert!(matches!(
+            connect(closed_addr).await,
+            Err(WsConnectError::Other(_))
+        ));
     }
 
     // ─── Host pinning for credential-carrying requests ──────────────────

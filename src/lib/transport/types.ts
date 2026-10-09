@@ -9,11 +9,11 @@ export interface RemoteTransportConfig {
   token: string
   windowInstanceId: string
   /**
-   * HTTP failures confirm rejected credentials. Older desktop WS proxies
-   * also emit their terminal unauthorized signal after network failures;
-   * distinguish that ambiguous source so the UI does not claim expiry.
+   * The remote server refused the connection's token: a 401 on an HTTP call
+   * or on the event socket's handshake. A socket that merely stopped
+   * retrying after network failures does not call this.
    */
-  onUnauthorized?: (source?: "websocket") => void
+  onUnauthorized?: () => void
 }
 
 /**
