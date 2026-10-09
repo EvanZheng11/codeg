@@ -1043,6 +1043,20 @@
   font-size: 0.625rem; /* 10px @100% */
 }
 
+/* The chat column's max width: the user's dragged width (see
+   `ChatWidthHandles`), else 48rem (= the old `max-w-3xl`). Capped at the parent
+   minus `--chat-gutter` on each side — a relative ceiling, so it follows the
+   window, and the column never runs edge to edge (the conversation shell sets
+   the gutter, which keeps the drag handles off the window's resize border;
+   elsewhere it is 0). Shared by the transcript rows and the composer dock so
+   they stay aligned. */
+@utility chat-content-w {
+  max-width: min(
+    var(--chat-content-width, 48rem),
+    100% - 2 * var(--chat-gutter, 0px)
+  );
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

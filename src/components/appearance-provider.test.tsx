@@ -5,10 +5,12 @@ import { AppearanceProvider } from "./appearance-provider"
 import {
   useChatAnimationsEnabled,
   useChatAnimationsSetting,
+  useChatContentWidth,
   useCustomStyle,
 } from "@/hooks/use-appearance"
 import {
   STORAGE_KEY_CHAT_ANIMATIONS,
+  STORAGE_KEY_CHAT_CONTENT_WIDTH,
   STORAGE_KEY_CUSTOM_THEME,
   STORAGE_KEY_ZOOM_LEVEL,
 } from "@/lib/appearance-script"
@@ -301,3 +303,76 @@ describe("chat animations switch", () => {
 function ChatAnimationsProbeOutside() {
   return <span data-testid="outside">{String(useChatAnimationsEnabled())}</span>
 }
+
+describe("chat content width", () => {
+  function WidthProbe() {
+    const { chatContentWidth, setChatContentWidth, previewChatContentWidth } =
+      useChatContentWidth()
+    return (
+      <>
+        <span data-testid="width">{String(chatContentWidth)}</span>
+        <button onClick={() => setChatContentWidth(900)}>set</button>
+        <button onClick={() => previewChatContentWidth(1000)}>preview</button>
+        <button onClick={() => setChatContentWidth(null)}>reset</button>
+      </>
+    )
+  }
+
+  const rootVar = () =>
+    document.documentElement.style.getPropertyValue("--chat-content-width")
+
+  const mount = () =>
+    render(
+      <AppearanceProvider>
+        <WidthProbe />
+      </AppearanceProvider>
+    )
+
+  it("defaults to null and sets no variable", () => {
+    mount()
+    expect(screen.getByTestId("width").textContent).toBe("null")
+    expect(rootVar()).toBe("")
+  })
+
+  it("restores a stored width into state on mount", () => {
+    localStorage.setItem(STORAGE_KEY_CHAT_CONTENT_WIDTH, "880")
+    mount()
+    expect(screen.getByTestId("width").textContent).toBe("880")
+  })
+
+  it("set updates state, <html> and storage; reset clears all three", () => {
+    mount()
+    fireEvent.click(screen.getByText("set"))
+    expect(screen.getByTestId("width").textContent).toBe("900")
+    expect(rootVar()).toBe("900px")
+    expect(localStorage.getItem(STORAGE_KEY_CHAT_CONTENT_WIDTH)).toBe("900")
+
+    fireEvent.click(screen.getByText("reset"))
+    expect(screen.getByTestId("width").textContent).toBe("null")
+    expect(rootVar()).toBe("")
+    expect(localStorage.getItem(STORAGE_KEY_CHAT_CONTENT_WIDTH)).toBeNull()
+  })
+
+  it("preview only touches <html>, not state or storage", () => {
+    mount()
+    fireEvent.click(screen.getByText("preview"))
+    expect(rootVar()).toBe("1000px")
+    expect(screen.getByTestId("width").textContent).toBe("null")
+    expect(localStorage.getItem(STORAGE_KEY_CHAT_CONTENT_WIDTH)).toBeNull()
+  })
+
+  it("follows another window's change via the storage event", () => {
+    mount()
+    localStorage.setItem(STORAGE_KEY_CHAT_CONTENT_WIDTH, "1100")
+    act(() => {
+      window.dispatchEvent(
+        new StorageEvent("storage", {
+          key: STORAGE_KEY_CHAT_CONTENT_WIDTH,
+          newValue: "1100",
+        })
+      )
+    })
+    expect(screen.getByTestId("width").textContent).toBe("1100")
+    expect(rootVar()).toBe("1100px")
+  })
+})

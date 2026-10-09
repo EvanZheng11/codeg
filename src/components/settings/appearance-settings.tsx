@@ -1,6 +1,15 @@
 "use client"
 
-import { LayoutGrid, Monitor, Moon, Sparkles, Sun, Type } from "lucide-react"
+import {
+  LayoutGrid,
+  Monitor,
+  Moon,
+  MoveHorizontal,
+  Sparkles,
+  Sun,
+  Type,
+} from "lucide-react"
+import { useState } from "react"
 import { useTranslations } from "next-intl"
 import { useTheme } from "next-themes"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -11,13 +20,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { Button } from "@/components/ui/button"
+import { Slider } from "@/components/ui/slider"
 import { Switch } from "@/components/ui/switch"
 import {
   useThemeColor,
   useZoomLevel,
   useWelcomeQuickActions,
   useChatAnimationsSetting,
+  useChatContentWidth,
 } from "@/hooks/use-appearance"
+import { CHAT_CONTENT_MIN, maxChatContentWidth } from "@/lib/chat-content-width"
 import { cn } from "@/lib/utils"
 import {
   DEFAULT_ZOOM_LEVEL,
@@ -32,6 +45,23 @@ import { FontSettingsSection } from "./font-settings-section"
 import { WorkspaceBackgroundSection } from "./workspace-background-section"
 import { CustomStyleSection } from "./custom-style-section"
 
+/** 内置默认宽度：48rem @ 100% 缩放 */
+const DEFAULT_CHAT_WIDTH_PX = 768
+
+/**
+ * 滑块上限：屏幕可用宽度减去两侧留白——主窗口铺满屏幕时聊天列能达到的最宽值。
+ * 不用 window.innerWidth：桌面端设置页是独立窗口，量到的是它自己的宽度。
+ * 实际显示宽度另由 CSS 按所在列的宽度再封顶（见 chat-content-w）。
+ */
+function settingsMaxChatWidth(): number {
+  const screenWidth =
+    typeof window === "undefined" ? 0 : (window.screen?.availWidth ?? 0)
+  return Math.max(
+    CHAT_CONTENT_MIN,
+    Math.floor(maxChatContentWidth(screenWidth) / 8) * 8
+  )
+}
+
 type ThemeMode = "system" | "light" | "dark"
 
 export function AppearanceSettings() {
@@ -42,6 +72,8 @@ export function AppearanceSettings() {
   const { showWelcomeQuickActions, setShowWelcomeQuickActions } =
     useWelcomeQuickActions()
   const { chatAnimations, setChatAnimations } = useChatAnimationsSetting()
+  const { chatContentWidth, setChatContentWidth } = useChatContentWidth()
+  const [chatWidthMax] = useState(settingsMaxChatWidth)
 
   const resolvedThemeLabel =
     resolvedTheme === "dark"
@@ -262,6 +294,60 @@ export function AppearanceSettings() {
               {t("chatAnimations.enable")}
             </span>
           </label>
+        </section>
+
+        {/* ===== Chat content width ===== */}
+        <section className="rounded-xl border bg-card p-4 space-y-4">
+          <div className="flex items-center gap-2">
+            <MoveHorizontal className="h-4 w-4 text-muted-foreground" />
+            <h2 className="text-sm font-semibold">
+              {t("chatWidth.sectionTitle")}
+            </h2>
+          </div>
+
+          <p className="text-xs text-muted-foreground leading-5">
+            {t("chatWidth.sectionDescription")}
+          </p>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs text-muted-foreground">
+                {t("chatWidth.label")}
+              </span>
+              <span className="text-xs tabular-nums text-muted-foreground">
+                {chatContentWidth === null
+                  ? t("chatWidth.default", { width: DEFAULT_CHAT_WIDTH_PX })
+                  : `${chatContentWidth}px`}
+              </span>
+            </div>
+            <Slider
+              value={[
+                Math.min(
+                  chatContentWidth ?? DEFAULT_CHAT_WIDTH_PX,
+                  chatWidthMax
+                ),
+              ]}
+              min={CHAT_CONTENT_MIN}
+              max={chatWidthMax}
+              step={8}
+              onValueChange={([v]) => setChatContentWidth(v)}
+              aria-label={t("chatWidth.label")}
+            />
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-2xs text-muted-foreground leading-4">
+                {t("chatWidth.hint")}
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={chatContentWidth === null}
+                onClick={() => setChatContentWidth(null)}
+              >
+                {t("chatWidth.reset")}
+              </Button>
+            </div>
+          </div>
         </section>
 
         {/* ===== Desktop Pet ===== */}

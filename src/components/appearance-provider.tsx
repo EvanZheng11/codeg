@@ -29,9 +29,15 @@ import {
   type FontSize,
 } from "@/lib/font-presets"
 import {
+  applyChatContentWidth,
+  commitChatContentWidth,
+  readChatContentWidth,
+} from "@/lib/chat-content-width"
+import {
   STORAGE_KEY_THEME_COLOR,
   STORAGE_KEY_ZOOM_LEVEL,
   STORAGE_KEY_CHAT_ANIMATIONS,
+  STORAGE_KEY_CHAT_CONTENT_WIDTH,
   STORAGE_KEY_WELCOME_QUICK_ACTIONS,
   STORAGE_KEY_UI_FONT,
   STORAGE_KEY_UI_FONT_CUSTOM,
@@ -121,6 +127,13 @@ type AppearanceContextValue = {
   /** 聊天区域动画总开关，默认开启；关闭时 <html> 带 data-chat-animations="off" */
   chatAnimations: boolean
   setChatAnimations: (on: boolean) => void
+  /**
+   * 聊天内容宽度（px），null = 内置默认（48rem）。拖拽手柄与外观设置页共用；
+   * set 会持久化并落到 <html>，preview 只改 DOM（拖拽过程中逐帧用，不触发重渲染）。
+   */
+  chatContentWidth: number | null
+  setChatContentWidth: (px: number | null) => void
+  previewChatContentWidth: (px: number | null) => void
   /** 界面字体（普通组件，驱动 --font-sans） */
   uiFont: FontSelection
   setUiFont: (id: string, custom?: string) => void
@@ -387,6 +400,11 @@ export function AppearanceProvider({
     }
   }, [chatAnimations])
 
+  // 聊天内容宽度：DOM 变量由 inline 脚本预置，这里持有状态供设置页回显。
+  const [chatContentWidth, setChatContentWidthState] = useState<number | null>(
+    () => readChatContentWidth()
+  )
+
   // 字体偏好的初始值从 localStorage 读 id/custom（视觉已由 inline 脚本就位，
   // 这里只是回填选中态，不会造成闪烁）。
   const [uiFont, setUiFontState] = useState<FontSelection>(() =>
@@ -539,6 +557,11 @@ export function AppearanceProvider({
   const setChatAnimations = useCallback((on: boolean) => {
     setChatAnimationsState(on)
     persist(STORAGE_KEY_CHAT_ANIMATIONS, on ? "1" : "0")
+  }, [])
+
+  const setChatContentWidth = useCallback((px: number | null) => {
+    setChatContentWidthState(px)
+    commitChatContentWidth(px)
   }, [])
 
   const setUiFont = useCallback((id: string, custom = "") => {
@@ -977,6 +1000,11 @@ export function AppearanceProvider({
           readBool(STORAGE_KEY_WELCOME_QUICK_ACTIONS, true)
         )
       }
+      if (e.key === STORAGE_KEY_CHAT_CONTENT_WIDTH) {
+        const next = readChatContentWidth()
+        setChatContentWidthState(next)
+        applyChatContentWidth(next)
+      }
       if (e.key === STORAGE_KEY_CHAT_ANIMATIONS) {
         setChatAnimationsState(readBool(STORAGE_KEY_CHAT_ANIMATIONS, true))
       }
@@ -1086,6 +1114,9 @@ export function AppearanceProvider({
         setShowWelcomeQuickActions,
         chatAnimations,
         setChatAnimations,
+        chatContentWidth,
+        setChatContentWidth,
+        previewChatContentWidth: applyChatContentWidth,
         uiFont,
         setUiFont,
         editorFont,

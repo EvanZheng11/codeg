@@ -181,6 +181,14 @@
       "sectionDescription": "Animationen für Ein-/Ausklappen, Tool-Aufrufe und Arbeitsstatus im Unterhaltungsbereich sowie sanftes Scrollen. Wenn deaktiviert, werden Änderungen sofort angezeigt. Ladeanzeigen drehen sich weiterhin.",
       "enable": "Chat-Animationen aktivieren"
     },
+    "chatWidth": {
+      "sectionTitle": "Chat-Breite",
+      "sectionDescription": "Maximale Breite der Unterhaltungsspalte und des Eingabefelds. Sie lässt sich auch durch Ziehen der Chat-Ränder anpassen.",
+      "label": "Inhaltsbreite",
+      "default": "Standard ({width}px)",
+      "hint": "Sehr große Werte werden an das Fenster angepasst.",
+      "reset": "Auf Standard zurücksetzen"
+    },
     "workspaceBackground": {
       "sectionTitle": "Arbeitsbereich-Hintergrund",
       "sectionDescription": "Zeigt ein Bild hinter dem gesamten Arbeitsbereich. Seitenleiste und Panels werden durchscheinend und mattiert, sodass das Bild durchscheint, und eine Maske sorgt für lesbaren Text.",
@@ -3464,7 +3472,8 @@
         "completedAt": "Abgeschlossen um",
         "jumpToPreviousUserMessage": "Zur Benutzernachricht springen",
         "showMore": "Mehr anzeigen",
-        "showLess": "Weniger anzeigen"
+        "showLess": "Weniger anzeigen",
+        "resizeWidth": "Ziehen, um die Chat-Breite zu ändern · Doppelklick zum Zurücksetzen"
       },
       "liveTurnStats": {
         "thinking": "Denkt nach...",

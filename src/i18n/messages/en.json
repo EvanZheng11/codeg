@@ -181,6 +181,14 @@
       "sectionDescription": "Entrance, expand/collapse, tool-call and working-status animations in the conversation area, plus smooth scrolling. Turn off for instant, motion-free updates. Spinners keep rotating.",
       "enable": "Enable chat animations"
     },
+    "chatWidth": {
+      "sectionTitle": "Chat width",
+      "sectionDescription": "Maximum width of the conversation column and the composer. You can also drag the edges of the chat column to adjust it.",
+      "label": "Content width",
+      "default": "Default ({width}px)",
+      "hint": "Very wide values are limited to fit the window.",
+      "reset": "Reset to default"
+    },
     "workspaceBackground": {
       "sectionTitle": "Workspace background",
       "sectionDescription": "Show a picture behind the whole workspace. Sidebar and panels turn translucent and frosted so the image shows through, and a mask keeps text readable.",
@@ -3464,7 +3472,8 @@
         "completedAt": "Completed at",
         "jumpToPreviousUserMessage": "Jump to user message",
         "showMore": "Show more",
-        "showLess": "Show less"
+        "showLess": "Show less",
+        "resizeWidth": "Drag to resize the chat width · double-click to reset"
       },
       "liveTurnStats": {
         "thinking": "Thinking...",

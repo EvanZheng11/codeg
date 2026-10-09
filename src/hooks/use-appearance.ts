@@ -2,6 +2,10 @@
 
 import { useContext } from "react"
 import { AppearanceContext } from "@/components/appearance-provider"
+import {
+  applyChatContentWidth,
+  commitChatContentWidth,
+} from "@/lib/chat-content-width"
 import { resolveFontStack } from "@/lib/font-presets"
 
 export function useAppearance() {
@@ -43,6 +47,20 @@ export function useChatAnimationsSetting() {
  */
 export function useChatAnimationsEnabled(): boolean {
   return useContext(AppearanceContext)?.chatAnimations ?? true
+}
+
+/**
+ * 聊天内容宽度。拖拽手柄与外观设置页共用。在 Provider 之外（测试、独立窗口）
+ * 回退为直接读写 lib 层（同一份 localStorage / CSS 变量），不抛错。
+ */
+export function useChatContentWidth() {
+  const ctx = useContext(AppearanceContext)
+  return {
+    chatContentWidth: ctx?.chatContentWidth ?? null,
+    setChatContentWidth: ctx?.setChatContentWidth ?? commitChatContentWidth,
+    previewChatContentWidth:
+      ctx?.previewChatContentWidth ?? applyChatContentWidth,
+  }
 }
 
 /** 界面字体（普通组件）。stack 已解析，可直接用于 style 或 CSS 变量。 */

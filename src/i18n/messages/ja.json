@@ -181,6 +181,14 @@
       "sectionDescription": "会話エリア内の折りたたみ/展開、ツール呼び出し、作業状態などのアニメーションとスムーズスクロールを制御します。オフにすると即時に更新されます。スピナーは回転し続けます。",
       "enable": "チャットのアニメーションを有効にする"
     },
+    "chatWidth": {
+      "sectionTitle": "チャット幅",
+      "sectionDescription": "会話列と入力欄の最大幅です。チャット領域の左右の端をドラッグして調整することもできます。",
+      "label": "コンテンツ幅",
+      "default": "既定（{width}px）",
+      "hint": "広すぎる値はウィンドウに収まるよう自動的に制限されます。",
+      "reset": "既定に戻す"
+    },
     "workspaceBackground": {
       "sectionTitle": "ワークスペースの背景",
       "sectionDescription": "ワークスペース全体の背後に画像を表示します。サイドバーやパネルは半透明のすりガラスになり画像が透けて見えます。マスクで文字の可読性を保ちます。",
@@ -3464,7 +3472,8 @@
         "completedAt": "完了時刻",
         "jumpToPreviousUserMessage": "前のユーザーメッセージへ",
         "showMore": "もっと見る",
-        "showLess": "折りたたむ"
+        "showLess": "折りたたむ",
+        "resizeWidth": "ドラッグでチャット幅を調整 · ダブルクリックで元に戻す"
       },
       "liveTurnStats": {
         "thinking": "考え中...",

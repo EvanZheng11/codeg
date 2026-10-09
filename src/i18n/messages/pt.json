@@ -181,6 +181,14 @@
       "sectionDescription": "Animações de recolher/expandir, chamadas de ferramentas e estado de trabalho na área de conversa, além da rolagem suave. Desative para atualizações instantâneas. Os indicadores de carregamento continuam girando.",
       "enable": "Ativar as animações do chat"
     },
+    "chatWidth": {
+      "sectionTitle": "Largura do chat",
+      "sectionDescription": "Largura máxima da coluna de conversa e da caixa de entrada. Você também pode arrastar as bordas do chat para ajustá-la.",
+      "label": "Largura do conteúdo",
+      "default": "Padrão ({width}px)",
+      "hint": "Valores muito grandes são limitados para caber na janela.",
+      "reset": "Redefinir para o padrão"
+    },
     "workspaceBackground": {
       "sectionTitle": "Plano de fundo da área de trabalho",
       "sectionDescription": "Mostra uma imagem atrás de toda a área de trabalho. A barra lateral e os painéis ficam translúcidos e foscos para deixar a imagem transparecer, e uma máscara mantém o texto legível.",
@@ -3464,7 +3472,8 @@
         "completedAt": "Concluído às",
         "jumpToPreviousUserMessage": "Ir para a mensagem do usuário",
         "showMore": "Mostrar mais",
-        "showLess": "Mostrar menos"
+        "showLess": "Mostrar menos",
+        "resizeWidth": "Arraste para ajustar a largura do chat · clique duas vezes para redefinir"
       },
       "liveTurnStats": {
         "thinking": "Pensando...",
