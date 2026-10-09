@@ -122,8 +122,12 @@ export function resizedChatContentWidth(
 ): number | null {
   const max = maxChatContentWidth(columnWidth, zoom)
   if (max < CHAT_CONTENT_MIN) return null
-  const next = Math.round(Math.min(Math.max(wanted, CHAT_CONTENT_MIN), max))
-  return Math.abs(next - current) < 0.5 ? null : next
+  const next = Math.min(Math.max(wanted, CHAT_CONTENT_MIN), max)
+  // Compared before rounding: a cap can fall on a half (a 1601px host at 200%
+  // zoom shows 788.5), and rounding it up would read as a change, replacing a
+  // wider preference with no visible effect.
+  if (Math.abs(next - current) < 0.5) return null
+  return Math.round(next)
 }
 
 /**

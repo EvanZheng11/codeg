@@ -4,6 +4,7 @@ import { NextIntlClientProvider } from "next-intl"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { ChatWidthHandles } from "./chat-width-handles"
+import { AppearanceProvider } from "@/components/appearance-provider"
 import { STORAGE_KEY_CHAT_CONTENT_WIDTH } from "@/lib/appearance-script"
 import {
   CHAT_CONTENT_GUTTER,
@@ -62,14 +63,18 @@ function stubLayout(
 function setup({
   hostWidth = 1600,
   children,
-}: { hostWidth?: number; children?: ReactNode } = {}) {
-  const view = render(
+  provider = false,
+}: { hostWidth?: number; children?: ReactNode; provider?: boolean } = {}) {
+  const tree = (
     <NextIntlClientProvider locale="en" messages={messages}>
       <div data-testid="host">
         {children}
         <ChatWidthHandles />
       </div>
     </NextIntlClientProvider>
+  )
+  const view = render(
+    provider ? <AppearanceProvider>{tree}</AppearanceProvider> : tree
   )
   const host = screen.getByTestId("host")
   const [left, right] = screen.getAllByRole("separator")
@@ -294,6 +299,47 @@ describe("ChatWidthHandles interrupted drag", () => {
     expect(rootVar()).toBe(`${1400 / 16}rem`)
     pointer(right, "pointerup", 988)
     expect(stored()).toBe("1400")
+  })
+
+  it("restores the width as stored now, not as of the last render", async () => {
+    // Another window stores 1200 mid-drag. This window's provider puts it on
+    // <html> at once, but its state update is still pending when the drag is
+    // cancelled; restoring the render's 900 would stick, since nothing
+    // re-applies the width when that update commits.
+    storeWidth(900)
+    const { right } = setup({ provider: true })
+    pointer(right, "pointerdown", 1250)
+    pointer(right, "pointermove", 1300)
+    await nextFrame()
+    expect(rootVar()).toBe(`${1000 / 16}rem`)
+    // Outside act on purpose: the provider's state update must still be
+    // pending when the cancel arrives.
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {})
+    localStorage.setItem(STORAGE_KEY_CHAT_CONTENT_WIDTH, "1200")
+    window.dispatchEvent(
+      new StorageEvent("storage", {
+        key: STORAGE_KEY_CHAT_CONTENT_WIDTH,
+        newValue: "1200",
+      })
+    )
+    pointer(right, "pointercancel", 1300)
+    await act(async () => {})
+    quiet.mockRestore()
+    expect(rootVar()).toBe(`${1200 / 16}rem`)
+    expect(stored()).toBe("1200")
+  })
+
+  it.each([
+    ["without a provider", false],
+    ["inside the provider", true],
+  ])("restores what the previous drag stored (%s)", (_, provider) => {
+    const { right } = setup({ provider })
+    pointer(right, "pointerdown", 1184)
+    pointer(right, "pointerup", 1234) // stores 868
+    pointer(right, "pointerdown", 1234)
+    pointer(right, "pointermove", 1300)
+    pointer(right, "pointercancel", 1300)
+    expect(rootVar()).toBe(`${868 / 16}rem`)
   })
 
   it("ignores the lostpointercapture that follows a normal release", () => {

@@ -135,6 +135,11 @@ type AppearanceContextValue = {
   chatContentWidth: number | null
   setChatContentWidth: (px: number | null) => void
   previewChatContentWidth: (px: number | null) => void
+  /**
+   * 同一个值，但在变化的那一刻就是新的（state 要等 React 提交才更新）。拖拽没存
+   * 宽度就结束时，手柄用它把已存的宽度放回 <html>。
+   */
+  getChatContentWidth: () => number | null
   /** 界面字体（普通组件，驱动 --font-sans） */
   uiFont: FontSelection
   setUiFont: (id: string, custom?: string) => void
@@ -417,6 +422,11 @@ export function AppearanceProvider({
   const [chatContentWidth, setChatContentWidthState] = useState<number | null>(
     () => readChatContentWidth()
   )
+  // 与 state 同值，但写入即生效：别的窗口改了宽度、本窗口的 state 还没提交时，
+  // 取消拖拽若按渲染时的旧值复原，会把新宽度盖掉，且之后 state 提交时没有任何
+  // 地方再把新值写回 <html>。
+  const chatContentWidthRef = useRef(chatContentWidth)
+  const getChatContentWidth = useCallback(() => chatContentWidthRef.current, [])
 
   // 字体偏好的初始值从 localStorage 读 id/custom（视觉已由 inline 脚本就位，
   // 这里只是回填选中态，不会造成闪烁）。
@@ -573,6 +583,7 @@ export function AppearanceProvider({
   }, [])
 
   const setChatContentWidth = useCallback((px: number | null) => {
+    chatContentWidthRef.current = px
     setChatContentWidthState(px)
     commitChatContentWidth(px)
   }, [])
@@ -1015,6 +1026,7 @@ export function AppearanceProvider({
       }
       if (e.key === STORAGE_KEY_CHAT_CONTENT_WIDTH) {
         const next = readChatContentWidth()
+        chatContentWidthRef.current = next
         setChatContentWidthState(next)
         applyChatContentWidth(next)
       }
@@ -1130,6 +1142,7 @@ export function AppearanceProvider({
         chatContentWidth,
         setChatContentWidth,
         previewChatContentWidth: applyChatContentWidth,
+        getChatContentWidth,
         uiFont,
         setUiFont,
         editorFont,

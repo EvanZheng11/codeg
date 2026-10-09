@@ -126,6 +126,13 @@ describe("resizedChatContentWidth", () => {
     expect(resizedChatContentWidth(976, 900, 1000)).toBe(900)
   })
 
+  it("keeps the preference at a cap that falls on a half", () => {
+    // A 1601px host at 200% shows at most 788.5. Rounding that up to 789
+    // must not read as widening and replace a wider stored preference.
+    expect(resizedChatContentWidth(788.5, 900, 1601, 2)).toBeNull()
+    expect(resizedChatContentWidth(788.5, 700, 1601, 2)).toBe(700)
+  })
+
   it("stores nothing when the width would not change", () => {
     expect(resizedChatContentWidth(900, 900.3, 1600)).toBeNull()
     expect(resizedChatContentWidth(767.8, 767.8, 1600)).toBeNull()

@@ -65,6 +65,8 @@ export function useChatContentWidth() {
     setChatContentWidth: ctx?.setChatContentWidth ?? commitChatContentWidth,
     previewChatContentWidth:
       ctx?.previewChatContentWidth ?? applyChatContentWidth,
+    /** The stored width as of now, not as of the last render. */
+    getChatContentWidth: ctx?.getChatContentWidth ?? readChatContentWidth,
   }
 }
 

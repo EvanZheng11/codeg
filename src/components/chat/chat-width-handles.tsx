@@ -139,7 +139,7 @@ function draggedWidth(
 
 function WidthHandle({ side }: { side: Side }) {
   const t = useTranslations("Folder.chat.messageList")
-  const { chatContentWidth, setChatContentWidth, previewChatContentWidth } =
+  const { setChatContentWidth, previewChatContentWidth, getChatContentWidth } =
     useChatContentWidth()
   const drag = useRef<DragState | null>(null)
   // Measured when the handle takes focus (and after each key), so a screen
@@ -186,11 +186,11 @@ function WidthHandle({ side }: { side: Side }) {
         // Nothing to store from here → show the stored width, not a stale
         // frame of an earlier position.
         previewChatContentWidth(
-          draggedWidth(state, side, host) ?? chatContentWidth
+          draggedWidth(state, side, host) ?? getChatContentWidth()
         )
       })
     },
-    [side, chatContentWidth, previewChatContentWidth]
+    [side, previewChatContentWidth, getChatContentWidth]
   )
 
   const onPointerUp = useCallback(
@@ -205,29 +205,30 @@ function WidthHandle({ side }: { side: Side }) {
       // show (see `resizedChatContentWidth`).
       const next = draggedWidth(state, side, host)
       endDrag(handle)
-      if (next === null) previewChatContentWidth(chatContentWidth)
+      if (next === null) previewChatContentWidth(getChatContentWidth())
       else setChatContentWidth(next)
     },
     [
       endDrag,
       side,
-      chatContentWidth,
       setChatContentWidth,
       previewChatContentWidth,
+      getChatContentWidth,
     ]
   )
 
   // Also wired to `lostpointercapture`, which follows every `pointerup`; the
   // drag is already over by then, so only a real interruption gets here with
   // one live. Its frames previewed widths that were never stored: put the
-  // stored one back.
+  // stored one back — as stored NOW, which may be another window's newer
+  // width, not the one this render saw.
   const onPointerCancel = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
       if (!drag.current) return
       endDrag(event.currentTarget)
-      previewChatContentWidth(chatContentWidth)
+      previewChatContentWidth(getChatContentWidth())
     },
-    [endDrag, chatContentWidth, previewChatContentWidth]
+    [endDrag, previewChatContentWidth, getChatContentWidth]
   )
 
   const onDoubleClick = useCallback(() => {
