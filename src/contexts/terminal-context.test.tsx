@@ -123,7 +123,9 @@ describe("TerminalProvider reload recovery", () => {
     expect(screen.getByTestId("command")).toBeEmptyDOMElement()
   })
 
-  it("explicit close records a kill even while spawn is still pending", () => {
+  it("explicit close kills the terminal even before a view has started it", () => {
+    // No view is mounted, so nothing has launched yet. The kill goes out
+    // anyway: the backend turns it into a cancellation of the launch.
     render(
       <TerminalProvider>
         <Probe />
@@ -139,7 +141,12 @@ describe("TerminalProvider reload recovery", () => {
     )
   })
 
-  it("rejects a forged terminal ID and preserves an unrelated window name", () => {
+  it("restores nothing under a window name it did not give, and keeps that name", () => {
+    // Everything else in the stored session is valid, so the window name is
+    // the only thing that can be refusing it. A forged terminal ID under a
+    // name of ours costs only that tab: "drops only the stored tab it cannot
+    // validate" below.
+    const id = "3f2c1b0a-9e8d-4c7b-a6f5-e4d3c2b1a098"
     window.name = "host-window"
     sessionStorage.setItem(
       "codeg:terminal-session:v1",
@@ -148,15 +155,8 @@ describe("TerminalProvider reload recovery", () => {
         scope: JSON.stringify(["main", null]),
         pageId: "host-window",
         isOpen: true,
-        activeTabId: "other-user-terminal",
-        tabs: [
-          {
-            id: "other-user-terminal",
-            folderId: 7,
-            title: "bad",
-            workingDir: "/tmp",
-          },
-        ],
+        activeTabId: id,
+        tabs: [{ id, folderId: 7, title: "valid", workingDir: "/tmp" }],
       })
     )
     render(
@@ -192,7 +192,14 @@ describe("TerminalProvider reload recovery", () => {
     expect(h.terminalKill).not.toHaveBeenCalled()
   })
 
-  it("does not restore another remote workspace window's terminals", () => {
+  it.each([
+    ["another window", { windowLabel: "remote-workspace-4", remoteId: 3 }],
+    [
+      "another remote connection",
+      { windowLabel: "remote-workspace-3", remoteId: 4 },
+    ],
+  ])("does not restore terminals saved for %s", (_, other) => {
+    // Either half of the scope alone must keep the session out.
     h.windowLabel = "remote-workspace-3"
     h.remoteId = 3
     const first = render(
@@ -204,8 +211,8 @@ describe("TerminalProvider reload recovery", () => {
     expect(screen.getByTestId("tabs")).toHaveTextContent("1")
     first.unmount()
 
-    h.windowLabel = "remote-workspace-4"
-    h.remoteId = 4
+    h.windowLabel = other.windowLabel
+    h.remoteId = other.remoteId
     render(
       <TerminalProvider>
         <Probe />
