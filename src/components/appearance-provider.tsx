@@ -209,6 +209,18 @@ export const AppearanceContext = createContext<AppearanceContextValue | null>(
   null
 )
 
+/**
+ * The chat-animations flag on its own, for the transcript's JS-driven motion
+ * (`useChatAnimationsEnabled`). `AppearanceContext`'s value is rebuilt on every
+ * provider render — a theme change, every tick of a settings slider relayed
+ * from the settings window — and the readers of this flag sit on the hot path
+ * (`MessageListView`, every `Shimmer`, each reply's stats row), mostly behind
+ * `memo` boundaries the big context would cut through. A bare boolean only
+ * re-renders them when the flag itself flips. Defaults to on, which is also
+ * what a tree with no provider gets.
+ */
+export const ChatAnimationsContext = createContext<boolean>(true)
+
 function persist(key: string, value: string) {
   try {
     localStorage.setItem(key, value)
@@ -1164,7 +1176,9 @@ export function AppearanceProvider({
         safeStyleRequested,
       }}
     >
-      {children}
+      <ChatAnimationsContext.Provider value={chatAnimations}>
+        {children}
+      </ChatAnimationsContext.Provider>
     </AppearanceContext.Provider>
   )
 }

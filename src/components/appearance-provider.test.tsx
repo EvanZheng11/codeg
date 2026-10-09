@@ -1,3 +1,4 @@
+import { memo } from "react"
 import { act, fireEvent, render, screen } from "@testing-library/react"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -297,6 +298,59 @@ describe("chat animations switch", () => {
   it("falls back to enabled outside a provider", () => {
     render(<ChatAnimationsProbeOutside />)
     expect(screen.getByTestId("outside").textContent).toBe("true")
+  })
+
+  it("follows another window's toggle via the storage event", () => {
+    render(
+      <AppearanceProvider>
+        <ChatAnimationsProbe />
+      </AppearanceProvider>
+    )
+    localStorage.setItem(STORAGE_KEY_CHAT_ANIMATIONS, "0")
+    act(() => {
+      window.dispatchEvent(
+        new StorageEvent("storage", {
+          key: STORAGE_KEY_CHAT_ANIMATIONS,
+          newValue: "0",
+        })
+      )
+    })
+    expect(screen.getByTestId("enabled").textContent).toBe("false")
+    expect(html().getAttribute("data-chat-animations")).toBe("off")
+  })
+
+  it("re-renders the flag's readers only when the flag changes", () => {
+    // The readers sit on the transcript's hot path behind memo boundaries; a
+    // chat-width change (or any other appearance change) must not reach them.
+    const rendered = vi.fn()
+    const FlagReader = memo(function FlagReader() {
+      rendered()
+      return (
+        <span data-testid="flag">{String(useChatAnimationsEnabled())}</span>
+      )
+    })
+    function Controls() {
+      const { setChatAnimations } = useChatAnimationsSetting()
+      const { setChatContentWidth } = useChatContentWidth()
+      return (
+        <>
+          <button onClick={() => setChatContentWidth(900)}>width</button>
+          <button onClick={() => setChatAnimations(false)}>off</button>
+        </>
+      )
+    }
+    render(
+      <AppearanceProvider>
+        <Controls />
+        <FlagReader />
+      </AppearanceProvider>
+    )
+    const before = rendered.mock.calls.length
+    fireEvent.click(screen.getByText("width"))
+    expect(rendered).toHaveBeenCalledTimes(before)
+    fireEvent.click(screen.getByText("off"))
+    expect(rendered).toHaveBeenCalledTimes(before + 1)
+    expect(screen.getByTestId("flag").textContent).toBe("false")
   })
 })
 

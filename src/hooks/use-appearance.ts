@@ -1,7 +1,10 @@
 "use client"
 
 import { useContext } from "react"
-import { AppearanceContext } from "@/components/appearance-provider"
+import {
+  AppearanceContext,
+  ChatAnimationsContext,
+} from "@/components/appearance-provider"
 import {
   applyChatContentWidth,
   commitChatContentWidth,
@@ -44,10 +47,11 @@ export function useChatAnimationsSetting() {
 
 /**
  * 聊天区域是否播放动画。供 JS 驱动的动画（Shimmer、平滑滚动）读取；
- * 在 Provider 之外（测试、独立窗口）回退为开启，不抛错。
+ * 在 Provider 之外（测试、独立窗口）回退为开启，不抛错。读的是只装这一个布尔值的
+ * ChatAnimationsContext，其它外观设置变化不会让这些热路径组件重渲染。
  */
 export function useChatAnimationsEnabled(): boolean {
-  return useContext(AppearanceContext)?.chatAnimations ?? true
+  return useContext(ChatAnimationsContext)
 }
 
 /**

@@ -15,6 +15,7 @@ import { MessageScrollProvider } from "./message-scroll-context"
 import { ModelLabelProvider } from "./model-label-context"
 import type { ModelLabelResolver } from "@/hooks/use-model-labels"
 import enMessages from "@/i18n/messages/en.json"
+import { ChatAnimationsContext } from "@/components/appearance-provider"
 
 function renderStats(ui: ReactNode, modelLabel?: ModelLabelResolver) {
   const tree = (
@@ -60,6 +61,45 @@ describe("TurnStats jump-to-previous-user gating", () => {
       />
     )
     expect(screen.queryByLabelText(jumpLabel)).not.toBeInTheDocument()
+  })
+})
+
+describe("TurnStats jump-to-previous-user scrolling", () => {
+  function renderWithScroll(animations: boolean) {
+    const scrollToIndex = vi.fn()
+    render(
+      <ChatAnimationsContext.Provider value={animations}>
+        <NextIntlClientProvider locale="en" messages={enMessages}>
+          <MessageScrollProvider value={{ scrollToIndex }}>
+            <TurnStats
+              copyText="hello"
+              duration_ms={42_000}
+              previousUserIndex={3}
+              usage={null}
+            />
+          </MessageScrollProvider>
+        </NextIntlClientProvider>
+      </ChatAnimationsContext.Provider>
+    )
+    return scrollToIndex
+  }
+
+  it("glides to the previous user message by default", async () => {
+    const scrollToIndex = renderWithScroll(true)
+    await userEvent.click(screen.getByLabelText(jumpLabel))
+    expect(scrollToIndex).toHaveBeenCalledWith(3, {
+      align: "start",
+      smooth: true,
+    })
+  })
+
+  it("jumps without gliding when chat animations are off", async () => {
+    const scrollToIndex = renderWithScroll(false)
+    await userEvent.click(screen.getByLabelText(jumpLabel))
+    expect(scrollToIndex).toHaveBeenCalledWith(3, {
+      align: "start",
+      smooth: false,
+    })
   })
 })
 
