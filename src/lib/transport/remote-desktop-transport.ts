@@ -111,6 +111,7 @@ export class RemoteDesktopTransport implements Transport {
   private reconnectCallbacks = new Set<() => void>()
   private connectionState: RemoteConnectionState = "reconnecting"
   private connectionListeners = new Set<() => void>()
+  private readyCallbacks = new Set<() => void>()
   /// Listener handle for `remote-ws-event-{id}`. Null when not subscribed.
   private unlistenWsEvent: UnlistenFn | null = null
   /// Opaque ID generated at construction time, passed to `remote_ws_subscribe`
@@ -338,6 +339,13 @@ export class RemoteDesktopTransport implements Transport {
     }
   }
 
+  onReady(callback: () => void): UnsubscribeFn {
+    this.readyCallbacks.add(callback)
+    return () => {
+      this.readyCallbacks.delete(callback)
+    }
+  }
+
   eventStream(): EventStream {
     if (!this.eventStreamInstance) {
       const host: AttachTransportHost = {
@@ -483,6 +491,13 @@ export class RemoteDesktopTransport implements Transport {
       this.wsOpen = true
       this.readyResolve()
       this.setConnectionState("connected")
+      for (const cb of this.readyCallbacks) {
+        try {
+          cb()
+        } catch (err) {
+          console.error("[RemoteDesktopTransport] ready callback threw:", err)
+        }
+      }
       // Notify EventStream so it can re-issue attach frames for any
       // active subscriptions. Fires on initial connect AND every reconnect.
       for (const cb of this.wsReadyCallbacks) {
@@ -560,6 +575,7 @@ export class RemoteDesktopTransport implements Transport {
     this.handlers.clear()
     this.reconnectCallbacks.clear()
     this.connectionListeners.clear()
+    this.readyCallbacks.clear()
     this.wsReadyCallbacks.clear()
     this.eventStreamInstance?.destroy()
     this.eventStreamInstance = null

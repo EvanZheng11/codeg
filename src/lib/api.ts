@@ -4908,9 +4908,9 @@ export async function terminalResize(
 
 /**
  * Recent output of an already-running terminal, for a viewer attaching to a
- * PTY it did not spawn (a canvas terminal card coming back from another
- * route). `alive: false` is the settled answer "nothing to attach to" — spawn
- * instead; it is never an error, so callers don't have to parse one.
+ * PTY it did not spawn (a canvas terminal card or restored panel tab).
+ * `alive: false, exists: true` carries retained final output; `exists: false`
+ * means no session is known. Older backends omit `exists`.
  *
  * Subscribe to `terminal://output/<id>` BEFORE calling this, and drop the
  * events whose `seq` is at or below the returned `seq` — that overlap is
@@ -4922,8 +4922,18 @@ export async function terminalSnapshot(
   return getTransport().call("terminal_snapshot", { terminalId })
 }
 
+/** Close a terminal: ends its process and forgets it, output included. */
 export async function terminalKill(terminalId: string): Promise<void> {
   return getTransport().call("terminal_kill", { terminalId })
+}
+
+/**
+ * End a terminal's process but keep the terminal: its final output stays on
+ * the backend for the tab still showing it, as after a natural exit, until
+ * `terminalKill` closes it. A server without `keepOutput` closes it instead.
+ */
+export async function terminalStop(terminalId: string): Promise<void> {
+  return getTransport().call("terminal_kill", { terminalId, keepOutput: true })
 }
 
 export async function terminalList(): Promise<TerminalInfo[]> {
