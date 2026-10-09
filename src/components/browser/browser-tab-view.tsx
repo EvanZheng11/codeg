@@ -1,19 +1,39 @@
 "use client"
 
-import { useState, type KeyboardEvent } from "react"
+import { useTranslations } from "next-intl"
+import { useEffect, useState, type KeyboardEvent } from "react"
 
 import type { BrowserWorkspaceTab } from "@/contexts/workspace-context"
-import { browserSetVisible } from "@/lib/browser/browser-api"
 import {
+  toLocalizedErrorMessage,
+  type AppErrorTranslator,
+} from "@/lib/app-error"
+import {
+  browserSetVisible,
+  browserSetWindowViewport,
+} from "@/lib/browser/browser-api"
+import { emulatedViewport } from "@/lib/browser/browser-device"
+import {
+  remoteConnectionOfProfile,
+  remoteHostDisplayName,
+} from "@/lib/browser/remote-host"
+import {
+  clearBrowserCreateFailure,
+  useBrowserCreateOutcome,
   useBrowserFindRequest,
   useBrowserTabState,
 } from "@/lib/browser/browser-tab-store"
 import { useBrowserCapabilities } from "@/lib/browser/use-browser-capabilities"
 import { browserTabBackendId } from "@/lib/file-tab-id"
 
-import { isDesktop } from "@/lib/transport"
+import { getActiveRemoteConnectionId, isDesktop } from "@/lib/transport"
 
 import { BrowserBridgeView } from "./browser-bridge-view"
+import {
+  BrowserDeviceSize,
+  useBrowserTabCustomSize,
+} from "./browser-device-size"
+import { BrowserDeviceStage } from "./browser-device-stage"
 import { BrowserFindBar } from "./browser-find-bar"
 import { BrowserRemoteTabView } from "./browser-remote-tab-view"
 import {
@@ -33,12 +53,84 @@ import { BrowserToolbar } from "./browser-toolbar"
  */
 export function BrowserTabView({ tab }: { tab: BrowserWorkspaceTab }) {
   if (!isDesktop()) return <BrowserBridgeView tab={tab} />
-  // An address of the remote codeg host: never a surface of this computer.
-  if (tab.browser.remote) return <BrowserRemoteTabView tab={tab} />
+  // An address of the remote codeg host: loaded through that host, or not
+  // at all — never from this computer. A record in a connection's profile is
+  // one whatever its flag says: its page was the remote host's.
+  if (
+    tab.browser.remote ||
+    remoteConnectionOfProfile(tab.browser.profile) !== null
+  ) {
+    return <RemoteBrowserTabView tab={tab} />
+  }
   return <NativeBrowserTabView tab={tab} />
 }
 
-function NativeBrowserTabView({ tab }: { tab: BrowserWorkspaceTab }) {
+/**
+ * A tab of the remote codeg host. Its page is shown here and fetched from
+ * there: the backend opens it in the window's connection's own profile, whose
+ * every connection goes through that connection's tunnel (`browser::remote`),
+ * and refuses — with the reason — whatever cannot be opened that way. Then the
+ * tab says where the address lives, and why it cannot be opened here.
+ */
+function RemoteBrowserTabView({ tab }: { tab: BrowserWorkspaceTab }) {
+  const tRoot = useTranslations()
+  const t = useTranslations("Browser.remote")
+  const capabilities = useBrowserCapabilities()
+  const state = useBrowserTabState(tab.id)
+  // Kept in the store: the host that asked may not be the one on screen
+  // when the answer arrives.
+  const outcome = useBrowserCreateOutcome(tab.id)
+  const connectionId = getActiveRemoteConnectionId()
+  const host = remoteHostDisplayName()
+  // A surface that is already there — a popup the backend adopted, a tab
+  // opened before — is shown whatever; there is nothing left to refuse.
+  if (state === null) {
+    // Outside a window bound to a remote server there is no connection to go
+    // through (a remote tab is only ever made in one).
+    if (connectionId === null) return <BrowserRemoteTabView tab={tab} />
+    if (capabilities?.remoteEgress === false) {
+      return (
+        <BrowserRemoteTabView
+          tab={tab}
+          reason={tRoot("browser.remote.error.unavailable")}
+        />
+      )
+    }
+    if (outcome?.kind === "failed") {
+      return (
+        <BrowserRemoteTabView
+          tab={tab}
+          reason={toLocalizedErrorMessage(
+            outcome.error,
+            tRoot as unknown as AppErrorTranslator
+          )}
+          onRetry={() => clearBrowserCreateFailure(tab.id)}
+        />
+      )
+    }
+  }
+  return (
+    <NativeBrowserTabView
+      tab={tab}
+      egress={connectionId}
+      showCreateError={false}
+      pendingLabel={host ? t("connecting", { host }) : t("connectingUnnamed")}
+    />
+  )
+}
+
+function NativeBrowserTabView({
+  tab,
+  egress = null,
+  showCreateError,
+  pendingLabel,
+}: {
+  tab: BrowserWorkspaceTab
+  /** See `BrowserSurfaceHost`. */
+  egress?: number | null
+  showCreateError?: boolean
+  pendingLabel?: string
+}) {
   const state = useBrowserTabState(tab.id)
   const capabilities = useBrowserCapabilities()
   const backendId = browserTabBackendId(tab.id)
@@ -74,9 +166,36 @@ function NativeBrowserTabView({ tab }: { tab: BrowserWorkspaceTab }) {
   // Find searches the page, which is in the other window — worth offering
   // when that window answers, and not when the host has no hold on it.
   const canFind = !ownedWindow || (capabilities?.ownedWindowControls ?? false)
+  const device = tab.browser.device
+  const viewport = emulatedViewport(device)
+  const viewportWidth = viewport?.width ?? null
+  const viewportHeight = viewport?.height ?? null
+  const setCustomSize = useBrowserTabCustomSize(tab.id)
+
+  // A page in a window of its own is not fitted to this slot, so it cannot be
+  // framed here: the window itself takes the device's size instead (and its
+  // own size back on the desktop). Asked on every change and on every host
+  // that learns the page is in a window; the backend leaves alone a window
+  // that is already the size asked for, so a person who resized it by hand
+  // keeps what they made.
+  useEffect(() => {
+    if (!ownedWindow || !backendId) return
+    void browserSetWindowViewport(
+      backendId,
+      viewportWidth !== null && viewportHeight !== null
+        ? { width: viewportWidth, height: viewportHeight }
+        : null
+    ).catch(() => {})
+  }, [backendId, viewportWidth, viewportHeight, ownedWindow])
 
   return (
-    <div className="flex h-full min-h-0 flex-col" onKeyDown={onKeyDown}>
+    // Marked for the device menu, which hands this view's custom size field
+    // the keyboard when "Custom" is picked.
+    <div
+      data-browser-tab-view=""
+      className="flex h-full min-h-0 flex-col"
+      onKeyDown={onKeyDown}
+    >
       <BrowserToolbar tab={tab} state={state} />
       <BrowserFindBar
         tab={tab}
@@ -97,12 +216,27 @@ function NativeBrowserTabView({ tab }: { tab: BrowserWorkspaceTab }) {
       <div className="relative min-h-0 flex-1">
         {/* Always mounted so the native surface keeps its bounds; the DOM
             layers below only show when the surface is hidden (error) or
-            never embedded (owned window). */}
-        <BrowserSurfaceHost
-          tab={tab}
-          hidden={error !== null}
-          className={error || ownedWindow ? "invisible" : undefined}
-        />
+            never embedded (owned window). Framed as the tab's device; an
+            owned window is that device's size itself, so nothing here is.
+            Under an error page nothing on the stage can be seen, so there
+            is no size to edit there either. */}
+        <BrowserDeviceStage
+          device={ownedWindow ? "desktop" : (device ?? "desktop")}
+          onCustomSize={error ? undefined : setCustomSize}
+        >
+          {(fit) => (
+            <BrowserSurfaceHost
+              tab={tab}
+              hidden={error !== null}
+              className={error || ownedWindow ? "invisible" : undefined}
+              egress={egress}
+              showCreateError={showCreateError}
+              pendingLabel={pendingLabel}
+              zoom={fit.zoom}
+              layoutKey={fit.layoutKey}
+            />
+          )}
+        </BrowserDeviceStage>
         {error ? (
           <div className="absolute inset-0 bg-background">
             <BrowserErrorPage tab={tab} error={error} url={url} />
@@ -114,7 +248,23 @@ function NativeBrowserTabView({ tab }: { tab: BrowserWorkspaceTab }) {
               onShow={() =>
                 backendId && void browserSetVisible(backendId, true, false)
               }
-            />
+            >
+              {/* The device the window is sized to, and — for a custom
+                  one — where its size is changed: there is no frame here
+                  to carry that line. */}
+              {device && viewport ? (
+                <div
+                  dir="ltr"
+                  data-browser-device-size=""
+                  className="flex h-[20px] items-center gap-1.5 text-[11px] text-muted-foreground tabular-nums"
+                >
+                  <BrowserDeviceSize
+                    device={device}
+                    onCustomSize={setCustomSize}
+                  />
+                </div>
+              ) : null}
+            </BrowserOwnedWindowCard>
           </div>
         ) : null}
       </div>

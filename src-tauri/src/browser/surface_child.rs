@@ -41,7 +41,7 @@ use super::hooks;
 use super::policy::{self, BrowserPolicy};
 use super::profile;
 use super::registry::{BrowserRegistry, BrowserTab};
-use super::surface::BrowserSurface;
+use super::surface::{page_zoom_to_apply, BrowserSurface};
 use super::types::{
     Bounds, BrowserOpenRequestPayload, BrowserPopupPayload, BrowserTabState, ChannelKind,
     NavigationBlockReason, PopupPresentation, SurfaceKind, TabKind,
@@ -101,6 +101,20 @@ fn rect(bounds: Bounds) -> Rect {
     }
 }
 
+/// Whether the engine can zoom a page: always on Windows, and on macOS from 11
+/// (`shim::supports_page_zoom`). Without it a tab emulating a device in a slot
+/// smaller than the device lays its page out at the frame's width instead.
+fn page_zoom_supported() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        shim::supports_page_zoom()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        true
+    }
+}
+
 /// Main thread only: which tab owns the platform webview behind `pointer`
 /// (see `channel::MessageSink`).
 fn tab_id_for_webview(pointer: usize) -> Option<String> {
@@ -110,6 +124,15 @@ fn tab_id_for_webview(pointer: usize) -> Option<String> {
             .find(|(_, wv)| shim::webview_pointer(wv) == pointer)
             .map(|(id, _)| id.clone())
     })
+}
+
+/// Main thread only: the tab whose surface has keyboard focus in `window` —
+/// its webview is the window's first responder, or holds the view that is.
+#[cfg(target_os = "macos")]
+pub fn tab_with_keyboard_focus(window: &objc2_app_kit::NSWindow) -> Option<String> {
+    shim::first_responder_chain(window)
+        .into_iter()
+        .find_map(tab_id_for_webview)
 }
 
 /// One sink for every tab: messages are attributed by source webview, because
@@ -360,7 +383,70 @@ impl ChildHandle {
     }
 
     pub fn zoom(&self, factor: f64) -> Result<(), ChildError> {
+        if !page_zoom_supported() {
+            return Ok(());
+        }
         self.op(move |wv| wv.zoom(factor))
+    }
+
+    /// Apply the geometry the registry holds for this tab — its bounds while
+    /// it is visible, and its page zoom (`page_zoom_to_apply`) — as it stands
+    /// when this runs on the main thread, not as it stood when the caller
+    /// asked.
+    ///
+    /// Requests are recorded on whatever thread their command runs on and
+    /// reach the main thread in no guaranteed order. Carrying values, an
+    /// overtaken request would land last and leave the page at its stale size
+    /// or zoom, with the newer one already spent; reading the newest record
+    /// here means whichever pass runs last applies the newest request. Bounds
+    /// and zoom go in the same turn, so no frame is ever drawn with one
+    /// applied and not the other — they change together when a tab emulating
+    /// a device is fitted into a different slot.
+    pub fn sync_geometry(&self) -> Result<(), ChildError> {
+        let app = self.app.clone();
+        let tab_id = self.tab_id.clone();
+        self.op(move |wv| {
+            let Some(registry) = app.try_state::<BrowserRegistry>() else {
+                return Ok(());
+            };
+            // Until the record holds still: a request recorded while this
+            // pass was applying may have skipped a pass of its own, having
+            // read `zoom_applied` from before this one published it (a hidden
+            // tab passes only when the zoom has to change). So the publish
+            // looks again, in the same lock, and goes round once more if the
+            // zoom asked for moved on meanwhile.
+            loop {
+                let Some((bounds, visible, wanted, applied)) = registry.update(&tab_id, |tab| {
+                    (
+                        tab.last_bounds,
+                        tab.visible,
+                        tab.zoom_wanted,
+                        tab.zoom_applied,
+                    )
+                }) else {
+                    return Ok(());
+                };
+                let zoom = page_zoom_to_apply(wanted, applied).filter(|_| page_zoom_supported());
+                if let Some(factor) = zoom {
+                    wv.zoom(factor)?;
+                }
+                if visible {
+                    wv.set_bounds(rect(bounds))?;
+                }
+                let settled = registry
+                    .update(&tab_id, |tab| {
+                        if zoom.is_some() {
+                            tab.zoom_applied = wanted;
+                            tab.state.zoom = wanted.unwrap_or(1.0);
+                        }
+                        tab.zoom_wanted == wanted
+                    })
+                    .unwrap_or(true);
+                if settled {
+                    return Ok(());
+                }
+            }
+        })
     }
 
     /// Through the shim, not `wry::WebView::open_devtools()`: the platforms
@@ -848,6 +934,27 @@ fn configure_child<'a>(
                     return false;
                 }
             }
+            // A remote profile's page on macOS addresses the remote host's
+            // loopback by an alias (see `browser::remote`), WebKit sending
+            // loopback addresses around the proxy: a link, redirect or script
+            // that goes to one is refused, and the tab goes to the same
+            // address on the alias instead. After the modifier-click check,
+            // which opens its own tab and so its own rewrite. A frame cannot
+            // be sent anywhere by the host; it is refused (its load would be
+            // stopped by the profile's loopback rules all the same). A form
+            // POSTed to a loopback address arrives as a GET: rare, since a
+            // remote page's own forms post to its own (alias) origin.
+            #[cfg(target_os = "macos")]
+            if profile::is_remote_profile(&nav_profile) {
+                if let Some(alias) = crate::browser::remote::alias_for(&parsed) {
+                    if main_frame {
+                        crate::browser::remote::redirect_to_alias(&nav_app, &nav_id, alias);
+                    } else {
+                        tracing::debug!("[browser] tab {nav_id} blocked a loopback frame: {url}");
+                    }
+                    return false;
+                }
+            }
             true
         })
         .with_on_page_load_handler({
@@ -923,7 +1030,7 @@ fn configure_child<'a>(
         // store that dies with it.
         let configuration = match (configuration, kind) {
             (Some(configuration), _) => configuration,
-            (None, ChildKind::Page) => super::shim::macos::profile_configuration(mtm, profile),
+            (None, ChildKind::Page) => super::shim::macos::profile_configuration(mtm, profile)?,
             (None, ChildKind::Document(_)) => super::shim::macos::document_configuration(mtm),
         };
         builder = builder.with_webview_configuration(configuration);
@@ -931,13 +1038,10 @@ fn configure_child<'a>(
     #[cfg(target_os = "windows")]
     {
         use tauri_runtime_wry::wry::WebViewBuilderExtWindows;
-        let _ = profile;
         // WebView2 takes the proxy (and everything else) from the environment's
-        // browser arguments: one string for every browser webview of the
-        // process, see `profile::windows_browser_args`.
-        builder = builder.with_additional_browser_args(profile::windows_browser_args(
-            profile::frozen_proxy().as_ref(),
-        ));
+        // browser arguments: one string per user-data folder for the life of
+        // the process, see `profile::windows_args_for`.
+        builder = builder.with_additional_browser_args(profile::windows_args_for(profile)?);
         // A popup: the opener's environment, arguments and user-data folder
         // included, which is what makes `NewWindowResponse::Create` acceptable
         // to the engine.
@@ -1162,7 +1266,7 @@ fn new_window_handler(
                 origin: None,
                 zoom: 1.0,
                 error: None,
-                remote_host: None,
+                remote_host: profile::remote_host(&profile),
                 opener_tab_id: Some(opener_tab_id.clone()),
                 profile: Some(profile.clone()),
                 agent_grant: None,

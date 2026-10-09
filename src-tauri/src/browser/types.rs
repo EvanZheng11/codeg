@@ -49,6 +49,16 @@ pub struct Bounds {
     pub height: f64,
 }
 
+/// A page's viewport, in CSS pixels: the device a tab emulates (see
+/// `src/lib/browser/browser-device.ts`). An owned window is sized to it; an
+/// embedded surface gets it as bounds and a page zoom instead.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewportSize {
+    pub width: f64,
+    pub height: f64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BrowserErrorKind {
@@ -57,6 +67,19 @@ pub enum BrowserErrorKind {
     Blocked,
     Failed,
     PopupDenied,
+    /// A remote tab's page (`browser::remote`): nothing listens on that port
+    /// on the remote host.
+    RemoteRefused,
+    /// A remote tab's page: the remote host cannot reach that address (no
+    /// route to it, or no such name there).
+    RemoteUnreachable,
+    /// A remote tab's page: the remote server's policy keeps its tunnel off
+    /// that address (`CODEG_BROWSER_TUNNEL=private`).
+    RemoteNotAllowed,
+    /// A remote tab's page: the remote host did not get through in time.
+    RemoteTimeout,
+    /// A remote tab's page: the tunnel to the remote host is down.
+    TunnelDown,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -95,6 +118,11 @@ pub struct BrowserTabState {
     pub can_go_back: bool,
     pub can_go_forward: bool,
     pub origin: Option<String>,
+    /// The page zoom the surface was last given. Not the person's: the only
+    /// thing that sets it is a tab emulating a device in a slot smaller than
+    /// that device's viewport, which zooms the page out so it still lays out
+    /// at the device's width (`commands::browser::set_bounds_core`). Always
+    /// 1 for an owned window, which is sized to the device instead.
     pub zoom: f64,
     pub error: Option<BrowserErrorInfo>,
     /// Set when the tab's traffic egresses through a remote workspace host.
@@ -152,6 +180,11 @@ pub struct BrowserCapabilities {
     /// window is the surface the platform shim is written for (Linux); false
     /// where it is the fallback and the host does not hold its webview.
     pub owned_window_controls: bool,
+    /// A remote-workspace window's tabs can reach the remote host through
+    /// its codeg-server (`browser::remote`): a profile of their own to proxy
+    /// (macOS 14+), and on macOS the embedded surface. Whether a given remote
+    /// server carries the traffic is only known when a tab asks.
+    pub remote_egress: bool,
 }
 
 /// The last frame of a page, handed back by `browser_set_visible` when the
@@ -210,6 +243,20 @@ pub const DOC_STATE_EVENT: &str = "browser://doc-state";
 /// this into a stream. Both edges come from the ring itself, so the mark on
 /// the "send to chat" control cannot drift from what the tab actually holds.
 pub const CONSOLE_ERRORS_EVENT: &str = "browser://console-errors";
+
+/// Where a remote connection's egress stands (`browser::egress`), on every
+/// change: the tabs of its profile say whether they still reach the remote
+/// host. App-wide, like every `browser://` event; a window keeps the
+/// connection it is bound to.
+pub const EGRESS_EVENT: &str = "browser://egress";
+
+#[cfg(feature = "tauri-runtime")]
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserEgressPayload {
+    pub connection_id: i32,
+    pub status: crate::browser::egress::EgressStatus,
+}
 
 /// A tab's web inspector is gone; put the page back where the host wants it.
 ///
@@ -424,6 +471,14 @@ mod tests {
         let bounds: Bounds =
             serde_json::from_str(r#"{"x":1,"y":2.5,"width":300,"height":200}"#).unwrap();
         assert_eq!(bounds.y, 2.5);
+        let viewport: ViewportSize = serde_json::from_str(r#"{"width":390,"height":844}"#).unwrap();
+        assert_eq!(
+            viewport,
+            ViewportSize {
+                width: 390.0,
+                height: 844.0
+            }
+        );
         let choice: SurfaceChoice = serde_json::from_str(r#""window""#).unwrap();
         assert_eq!(choice, SurfaceChoice::Window);
 

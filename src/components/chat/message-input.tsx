@@ -103,6 +103,7 @@ import {
   type ModelOptionGroup,
 } from "@/lib/model-config-groups"
 import { useAgentSkills } from "@/hooks/use-agent-skills"
+import { isPrimaryPointerCoarse } from "@/hooks/use-is-coarse-pointer"
 import { useScrollbarSafeDismiss } from "@/hooks/use-scrollbar-safe-dismiss"
 import { useAgentVocabulary } from "@/hooks/use-agent-vocabulary"
 import {
@@ -686,12 +687,26 @@ export function MessageInput({
   // editor a tick after mount (mirrors the hydration effect's gate). Ordered
   // after that hydration effect so this rAF runs after its setContent, landing
   // the caret at the end of a restored draft rather than before it.
+  //
+  // Skipped on a coarse pointer, where focusing the editor raises the soft
+  // keyboard over the transcript. Each trigger here is a moment the user is
+  // more likely reading than typing: a session opening, a switch to one, a turn
+  // ending. Tapping the composer still focuses it (natively in the text, the
+  // chrome-press handler in the padding), so the keyboard comes up on demand.
+  // The pointer kind is read when the focus would happen, not subscribed to.
+  // Every open tab keeps its composer mounted, so a subscription would cost
+  // each one a listener and a re-render on every pointer change. As a
+  // dependency here it would also focus an idle composer when the pointer turns
+  // fine (a 2-in-1 docking to its mouse).
   useEffect(() => {
-    if (isActive && composerReady && !isPrompting) {
-      requestAnimationFrame(() => {
-        editorRef.current?.focus()
-      })
-    }
+    if (!isActive || !composerReady || isPrompting) return
+    if (isPrimaryPointerCoarse()) return
+    const raf = requestAnimationFrame(() => {
+      editorRef.current?.focus()
+    })
+    // Dropped if the tab goes inactive or a turn starts before the frame runs.
+    // A tiled group keeps that composer on screen, where it would take the caret.
+    return () => cancelAnimationFrame(raf)
   }, [isActive, composerReady, isPrompting])
 
   // Re-hydrate when the user (re)edits a *different* queue item after the
@@ -1530,6 +1545,17 @@ export function MessageInput({
     historyDraftRef.current = null
   }, [clearAttachments, closeSlashMenu])
 
+  // Async steering must compare against the current draft, including images
+  // added or removed while delivery was awaiting confirmation.
+  const currentComposerRef = useRef({
+    buildDraft,
+    draftStorageKey: effectiveDraftStorageKey,
+  })
+  currentComposerRef.current = {
+    buildDraft,
+    draftStorageKey: effectiveDraftStorageKey,
+  }
+
   const handleSend = useCallback(() => {
     // The editor stays editable while `disabled` (the agent is busy) so the user
     // can keep typing, but a plain send is blocked — only enqueue / queue-edit
@@ -1606,10 +1632,23 @@ export function MessageInput({
     }
     const draft = buildDraft()
     if (!draft) return
+    const sentEditor = editorRef.current?.getEditor()
+    // Keep the whole edited draft: appending during delivery can retain text
+    // already sent, but clearing or trimming it would discard the user's edits.
+    const clearSentDraft = () => {
+      const current = currentComposerRef.current
+      if (
+        current.draftStorageKey === effectiveDraftStorageKey &&
+        editorRef.current?.getEditor() === sentEditor &&
+        JSON.stringify(current.buildDraft()) === JSON.stringify(draft)
+      ) {
+        resetComposer()
+      }
+    }
     const enqueueInstead = () => {
       if (!onEnqueue) return
       onEnqueue(draft, showModeSelector ? effectiveModeId : null)
-      resetComposer()
+      clearSentDraft()
       toast.info(t("steerQueuedInstead"))
     }
     const payload = buildSteerPayload(draft)
@@ -1617,7 +1656,7 @@ export function MessageInput({
     setSteering(true)
     try {
       await onSteer(payload.text, payload.blocks)
-      resetComposer()
+      clearSentDraft()
     } catch (err) {
       if (isNoActiveTurnRejection(err)) {
         // The turn ended in the race window — reroute through the queue.
@@ -1640,6 +1679,7 @@ export function MessageInput({
     onEnqueue,
     showModeSelector,
     effectiveModeId,
+    effectiveDraftStorageKey,
     resetComposer,
     steerChannel,
     t,
@@ -2126,15 +2166,21 @@ export function MessageInput({
           </div>
         </div>
       )}
-      {/* When the folder/branch row is attached below the composer, this group
-          clips both into one rounded box (`overflow-hidden rounded-xl`); the
-          drag-active ring rides the wrapper so it isn't clipped. Standalone
-          (no row) it's layout-neutral (`display:contents`). */}
+      {/* Attached, this group clips the composer and the folder/branch row
+          below it into one rounded box (`overflow-hidden rounded-xl`); the
+          drag-active ring rides the wrapper so it isn't clipped. Standalone it
+          stays a plain block, never `display:contents`, because the row comes
+          and goes under a mounted editor (on a cold start it appears once the
+          restored tab's folder loads): some Blink builds (Chromium 111,
+          WebView2 145; not Chrome 153) drop the layout boxes inside the chrome
+          below, a size container (`@container`), when this ancestor flips
+          between `contents` and a box in either direction, leaving the editor
+          0x0 and unable to take input. */}
       <div
         className={cn(
-          folderBranchPickerAttached
-            ? "overflow-hidden rounded-xl transition-colors"
-            : "contents",
+          "block",
+          folderBranchPickerAttached &&
+            "overflow-hidden rounded-xl transition-colors",
           folderBranchPickerAttached &&
             showDragActive &&
             "ring-1 ring-primary/40"

@@ -13,7 +13,7 @@ use crate::app_error::AppCommandError;
 use crate::browser::agent::{self, GrantLevel};
 use crate::browser::blank_page;
 use crate::browser::capture::{self, CaptureOutcome, CaptureRegion, CaptureRequest};
-use crate::browser::console::{ConsoleLevel, ConsoleQuery, ConsoleReadout};
+use crate::browser::console::{ConsoleEntry, ConsoleLevel, ConsoleQuery, ConsoleReadout};
 use crate::browser::confirm::{
     AskRefused, EvalConsent, EvalRequestPayload, EVAL_CONFIRM_TIMEOUT,
 };
@@ -28,7 +28,7 @@ use crate::browser::open_request;
 use crate::browser::types::{
     Bounds, BrowserCapabilities, BrowserErrorInfo, BrowserErrorKind, BrowserOpenRequestPayload,
     BrowserTabState, ChannelKind, DetectedService, FrozenFrame, SurfaceChoice, SurfaceKind,
-    TabKind,
+    TabKind, ViewportSize,
 };
 use crate::browser::{events, hooks, listener, policy, profile, services, tab_label};
 
@@ -101,6 +101,7 @@ pub fn capabilities(policy: &BrowserPolicy) -> BrowserCapabilities {
         profiles: enabled && profile::profiles_supported(),
         sign_in_user_agent: enabled && profile::sign_in_user_agent_supported(),
         owned_window_controls: crate::browser::surface_window::HAS_CHANNEL,
+        remote_egress: enabled && crate::browser::remote::supported(),
     }
 }
 
@@ -170,6 +171,103 @@ fn window_err(what: &str, err: impl std::fmt::Display) -> AppCommandError {
     AppCommandError::window(what.to_string(), err.to_string())
 }
 
+/// The page zoom an embedded surface may be given. Chromium (WebView2) holds
+/// its zoom to this range, and WebKit is held to the same so a tab behaves
+/// alike on both. The frontend only ever asks for less than 1 — a tab
+/// emulating a device whose viewport is larger than the slot it is shown in.
+pub const MIN_PAGE_ZOOM: f64 = 0.25;
+pub const MAX_PAGE_ZOOM: f64 = 5.0;
+
+fn page_zoom(raw: f64) -> Result<f64, AppCommandError> {
+    if !raw.is_finite() || raw <= 0.0 {
+        return Err(AppCommandError::invalid_input(format!(
+            "invalid page zoom {raw}"
+        )));
+    }
+    Ok(raw.clamp(MIN_PAGE_ZOOM, MAX_PAGE_ZOOM))
+}
+
+/// What an owned window may be sized to for an emulated device: something a
+/// screen can hold, in logical pixels.
+const WINDOW_VIEWPORT_RANGE: std::ops::RangeInclusive<f64> = 100.0..=8192.0;
+
+fn window_viewport(raw: ViewportSize) -> Result<ViewportSize, AppCommandError> {
+    if WINDOW_VIEWPORT_RANGE.contains(&raw.width) && WINDOW_VIEWPORT_RANGE.contains(&raw.height) {
+        Ok(raw)
+    } else {
+        Err(AppCommandError::invalid_input(format!(
+            "invalid viewport {} x {}",
+            raw.width, raw.height
+        )))
+    }
+}
+
+/// Size an owned window's content to `size`, with `min` as the least it may
+/// be dragged to.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct WindowResize {
+    size: ViewportSize,
+    min: ViewportSize,
+}
+
+/// What an owned window's tab records, and what is done to the window, when
+/// it is asked to show `requested` (`None` = a desktop again).
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct WindowViewportPlan {
+    viewport: Option<ViewportSize>,
+    restore: Option<ViewportSize>,
+    resize: Option<WindowResize>,
+}
+
+/// `current` and `restore` are the tab's `window_viewport` and
+/// `window_restore`; `own_size` is the window's content size right now.
+fn plan_window_viewport(
+    current: Option<ViewportSize>,
+    restore: Option<ViewportSize>,
+    requested: Option<ViewportSize>,
+    own_size: ViewportSize,
+) -> WindowViewportPlan {
+    let (floor_width, floor_height) = crate::browser::surface_window::MIN_INNER_SIZE;
+    if current == requested {
+        // Asked again — every host that shows the tab asks once it knows the
+        // page is in a window of its own. Sizing it again would undo whatever
+        // the person did to the window since.
+        return WindowViewportPlan {
+            viewport: current,
+            restore,
+            resize: None,
+        };
+    }
+    match requested {
+        Some(size) => WindowViewportPlan {
+            viewport: Some(size),
+            // Only the first device keeps the window's size: from one device
+            // to another the size the window has is the last device's.
+            restore: restore.or(Some(own_size)),
+            resize: Some(WindowResize {
+                size,
+                // A phone is narrower than a person may otherwise drag the
+                // window to.
+                min: ViewportSize {
+                    width: floor_width.min(size.width),
+                    height: floor_height.min(size.height),
+                },
+            }),
+        },
+        None => WindowViewportPlan {
+            viewport: None,
+            restore: None,
+            resize: Some(WindowResize {
+                size: restore.unwrap_or(own_size),
+                min: ViewportSize {
+                    width: floor_width,
+                    height: floor_height,
+                },
+            }),
+        },
+    }
+}
+
 pub struct OpenTabParams {
     pub tab_id: String,
     pub url: String,
@@ -181,6 +279,11 @@ pub struct OpenTabParams {
     /// The browser profile to open the tab in (`default` when the caller has
     /// no opinion).
     pub profile: String,
+    /// The page zoom to build an embedded surface with, for a tab emulating
+    /// a device (see `set_bounds_core`): its first document already lays out
+    /// at the device's width. `None` for a desktop tab. Ignored for an owned
+    /// window.
+    pub zoom: Option<f64>,
 }
 
 pub fn open_tab_core(
@@ -190,6 +293,7 @@ pub fn open_tab_core(
     params: OpenTabParams,
 ) -> Result<BrowserTabState, AppCommandError> {
     validate_tab_id(&params.tab_id)?;
+    let zoom = params.zoom.map(page_zoom).transpose()?;
     // Held until the tab is registered: a second open of the same id while
     // this one builds its surface must fail, not build a second surface.
     let reservation = registry.reserve(&params.tab_id)?;
@@ -201,7 +305,10 @@ pub fn open_tab_core(
             "the built-in browser is disabled by the administrator's policy",
         ));
     }
-    let url = parse_web_url(&params.url)?;
+    let asked = parse_web_url(&params.url)?;
+    // Where the tab really goes: a remote profile's loopback address, on
+    // macOS, by its alias (see `browser::remote`).
+    let url = crate::browser::remote::egress_address(&params.profile, &asked).into_owned();
     let label = tab_label(&params.tab_id);
     profile::check(&params.profile).map_err(AppCommandError::invalid_input)?;
     // Held until this returns (the tab is registered by then): a deletion of
@@ -211,7 +318,15 @@ pub fn open_tab_core(
     profile::prepare(app, &params.profile)
         .map_err(|e| window_err("Failed to prepare the browser profile", e))?;
 
-    let surface = match pick_surface(params.surface) {
+    // A remote profile's tab on macOS is embedded whatever the preference:
+    // the alias rewrite and the loopback rules are the embedded surface's
+    // (`remote::supported` refuses a build without it).
+    let choice = if cfg!(target_os = "macos") && profile::is_remote_profile(&params.profile) {
+        SurfaceChoice::Child
+    } else {
+        params.surface
+    };
+    let surface = match pick_surface(choice) {
         #[cfg(all(
             feature = "browser-child",
             any(target_os = "macos", target_os = "windows")
@@ -261,28 +376,44 @@ pub fn open_tab_core(
         origin: None,
         zoom: 1.0,
         error: None,
-        remote_host: None,
+        remote_host: profile::remote_host(&params.profile),
         opener_tab_id: None,
         profile: Some(params.profile.clone()),
         agent_grant: None,
     };
-    if let Err(err) = registry.insert_reserved(
-        BrowserTab::new(
-            state.clone(),
-            surface.clone(),
-            params.bounds,
-            !params.background,
-            params.devtools,
-        ),
-        reservation,
-    ) {
+    let mut tab = BrowserTab::new(
+        state.clone(),
+        surface.clone(),
+        params.bounds,
+        !params.background,
+        params.devtools,
+    );
+    tab.zoom_wanted = zoom.filter(|_| surface.is_embedded());
+    let zoomed = tab.zoom_wanted.is_some();
+    if let Err(err) = registry.insert_reserved(tab, reservation) {
         let _ = surface.close();
         return Err(err);
+    }
+    let mut state = state;
+    // Before anything loads, so the first document already lays out at the
+    // width it is zoomed for. Not fatal either: the tab works, only at the
+    // slot's width until the frontend's next bounds push zooms it.
+    if zoomed {
+        match surface.sync_geometry() {
+            Ok(()) => {
+                if let Some(next) = registry.update(&params.tab_id, |tab| tab.state.clone()) {
+                    state = next;
+                }
+            }
+            Err(err) => tracing::warn!(
+                "[browser] tab {}: page zoom not applied ({err})",
+                params.tab_id
+            ),
+        }
     }
     // The helper must be in place before the first real document loads;
     // `about:blank` is still showing at this point. A failed install is not
     // fatal: the tab works, only the page channel is missing.
-    let mut state = state;
     if surface.has_channel() {
         match surface.install_channel() {
             // Stays `degraded` until the helper's `hello` proves the round trip.
@@ -313,11 +444,11 @@ pub fn open_tab_core(
     // A blocked address gets its tab — the caller (an agent tool, a deep
     // link) asked for one and the block page is where the user learns why —
     // but nothing is loaded into it.
-    if blocked_by_policy(app, &url) {
+    if blocked_by_policy(app, &asked) || blocked_by_policy(app, &url) {
         let state = registry
             .update_state(&params.tab_id, |s| {
                 s.loading = false;
-                s.error = Some(blocked_error(&url));
+                s.error = Some(blocked_error(&asked));
             })
             .unwrap_or(state);
         events::emit_state(app, &state);
@@ -809,24 +940,99 @@ pub fn close_all_for_owner(app: &AppHandle, owner_window: &str) {
     }
 }
 
+/// Place an embedded surface at `bounds`, and zoom its page to `zoom` while
+/// its tab emulates a device (`None` otherwise: a desktop tab's zoom is not
+/// ours to set).
+///
+/// The zoom is what lets a tab emulate a device in a slot smaller than that
+/// device's viewport: the frontend fits a frame of the device's proportions
+/// into the slot and zooms the page out by the same factor, so the page still
+/// lays out at the device's width — its media queries see a phone, not a
+/// postage stamp.
+///
+/// Both are recorded here and applied by a main-thread pass that reads them
+/// back (`ChildHandle::sync_geometry`), so of two requests in flight the newer
+/// always wins whichever pass runs last. A hidden surface picks its bounds up
+/// when it is shown; moving it while hidden is wasted main-thread work on every
+/// split-pane drag — but a zoom that still has to change gets its pass even
+/// then, since the page keeps it either way.
 pub fn set_bounds_core(
     registry: &BrowserRegistry,
     tab_id: &str,
     bounds: Bounds,
+    zoom: Option<f64>,
 ) -> Result<(), AppCommandError> {
+    let zoom = zoom.map(page_zoom).transpose()?;
     let surface = surface_of(registry, tab_id)?;
-    let visible = registry
+    // An owned window is not fitted to the slot, and it is sized to an
+    // emulated device rather than zoomed (`set_window_viewport_core`).
+    let embedded = surface.is_embedded();
+    let pass = registry
         .update(tab_id, |tab| {
             tab.last_bounds = bounds;
-            tab.visible
+            if !embedded {
+                return false;
+            }
+            tab.zoom_wanted = zoom;
+            tab.visible || tab.zoom_wanted != tab.zoom_applied
         })
         .unwrap_or(false);
-    // A hidden surface picks the bounds up again when it is shown; moving it
-    // while hidden is wasted main-thread work on every split-pane drag.
-    if visible && surface.is_embedded() {
+    if pass {
         surface
-            .set_bounds(bounds)
+            .sync_geometry()
             .map_err(|e| window_err("Failed to move browser webview", e))?;
+    }
+    Ok(())
+}
+
+/// Owned-window viewport changes, one at a time. Each reads what the window
+/// was last sized to and what its own size was before that; two planned from
+/// the same reading would remember a device's size as the window's own, and
+/// the desktop could never get the real one back.
+static WINDOW_VIEWPORT_CHANGES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Size an owned window to the device its tab emulates — the window's own
+/// size again when `viewport` is `None` (a desktop). An owned window is not
+/// fitted to the slot, so where an embedded surface is framed and zoomed the
+/// window itself takes the device's size: the page in it lays out at the
+/// device's width, at 100%. Nothing for an embedded surface, which gets the
+/// device through `set_bounds_core`.
+pub fn set_window_viewport_core(
+    registry: &BrowserRegistry,
+    tab_id: &str,
+    viewport: Option<ViewportSize>,
+) -> Result<(), AppCommandError> {
+    let viewport = viewport.map(window_viewport).transpose()?;
+    let surface = surface_of(registry, tab_id)?;
+    if surface.is_embedded() {
+        return Ok(());
+    }
+    let _one_at_a_time = WINDOW_VIEWPORT_CHANGES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let (current, restore) = registry
+        .update(tab_id, |tab| (tab.window_viewport, tab.window_restore))
+        .ok_or_else(|| AppCommandError::not_found(format!("browser tab {tab_id} not found")))?;
+    if current == viewport {
+        return Ok(());
+    }
+    let (default_width, default_height) = crate::browser::surface_window::INNER_SIZE;
+    let own_size = surface
+        .window_inner_size()
+        .map_err(|e| window_err("Failed to read the browser window's size", e))?
+        .unwrap_or(ViewportSize {
+            width: default_width,
+            height: default_height,
+        });
+    let plan = plan_window_viewport(current, restore, viewport, own_size);
+    registry.update(tab_id, |tab| {
+        tab.window_viewport = plan.viewport;
+        tab.window_restore = plan.restore;
+    });
+    if let Some(resize) = plan.resize {
+        surface
+            .set_window_inner_size(resize.size, resize.min)
+            .map_err(|e| window_err("Failed to resize the browser window", e))?;
     }
     Ok(())
 }
@@ -973,30 +1179,35 @@ pub fn navigate_core(
     tab_id: &str,
     raw_url: &str,
 ) -> Result<BrowserTabState, AppCommandError> {
-    let url = parse_web_url(raw_url)?;
+    let asked = parse_web_url(raw_url)?;
     let surface = surface_of(registry, tab_id)?;
+    let current = registry.state(tab_id);
     // A document guest shows one file; it is not an address bar.
-    if registry
-        .state(tab_id)
-        .is_some_and(|state| state.kind == TabKind::Document)
-    {
+    if current.as_ref().is_some_and(|state| state.kind == TabKind::Document) {
         return Err(AppCommandError::invalid_input(
             "a document view cannot be navigated to another address",
         ));
     }
+    // A remote tab's loopback address, on macOS, by its alias (see
+    // `browser::remote`): sent there now rather than refused by the tab's
+    // navigation hook and sent there after.
+    let url = match current.as_ref().and_then(|state| state.profile.as_deref()) {
+        Some(profile_id) => crate::browser::remote::egress_address(profile_id, &asked).into_owned(),
+        None => asked.clone(),
+    };
     // Refused by a site rule: the block page takes the place of the page,
     // as in a browser, and nothing is loaded. Whatever was loading before
     // is stopped and its watcher retired, or its commit or failure would
     // land on top of the block a moment later.
-    if blocked_by_policy(app, &url) {
+    if blocked_by_policy(app, &asked) || blocked_by_policy(app, &url) {
         let _ = surface.stop();
         let state = registry
             .update(tab_id, |tab| {
                 tab.load_seq += 1;
                 tab.provisional_url = None;
-                tab.state.requested_url = url.to_string();
+                tab.state.requested_url = asked.to_string();
                 tab.state.loading = false;
-                tab.state.error = Some(blocked_error(&url));
+                tab.state.error = Some(blocked_error(&asked));
                 tab.state.clone()
             })
             .ok_or_else(|| AppCommandError::not_found(format!("browser tab {tab_id} not found")))?;
@@ -2853,9 +3064,9 @@ pub async fn pick_element_core(
     registry: &BrowserRegistry,
     tab_id: &str,
 ) -> Result<handoff::PageHandoff, AppCommandError> {
-    let Some((surface, generation)) =
-        registry.read(tab_id, |tab| (tab.surface.clone(), tab.generation))
-    else {
+    let Some((surface, generation, profile)) = registry.read(tab_id, |tab| {
+        (tab.surface.clone(), tab.generation, tab.state.profile.clone())
+    }) else {
         return Err(AppCommandError::not_found(format!(
             "browser tab {tab_id} not found"
         )));
@@ -2882,7 +3093,7 @@ pub async fn pick_element_core(
         stop_picking(registry, tab_id, Some(&token)).await;
         return Err(err);
     }
-    let picked = match tokio::time::timeout(PICK_TIMEOUT, wait).await {
+    let mut picked = match tokio::time::timeout(PICK_TIMEOUT, wait).await {
         Ok(Ok(handoff::PickReport::Picked(element))) => element,
         // Cancelled by the person, or the slot went away under us: a new
         // document, a second pick, the tab closing. Either way there is
@@ -2894,6 +3105,9 @@ pub async fn pick_element_core(
             return Ok(handoff::PageHandoff::cancelled());
         }
     };
+    // Everything below says where the page is — the block, the link, the
+    // picture — and says it as the agent's host knows it (a remote tab).
+    picked.href = crate::browser::remote::host_address(profile.as_deref(), &picked.href).into_owned();
     let text = handoff::render_element(&picked);
     let (url, _) = handoff::redact_url(&picked.href);
     // A picture of the element, when it has a box on screen and the page said
@@ -2996,9 +3210,9 @@ pub async fn capture_page_core(
     registry: &BrowserRegistry,
     tab_id: &str,
 ) -> Result<handoff::PageHandoff, AppCommandError> {
-    let Some((surface, title)) =
-        registry.read(tab_id, |tab| (tab.surface.clone(), tab.state.title.clone()))
-    else {
+    let Some((surface, title, profile)) = registry.read(tab_id, |tab| {
+        (tab.surface.clone(), tab.state.title.clone(), tab.state.profile.clone())
+    }) else {
         return Err(AppCommandError::not_found(format!(
             "browser tab {tab_id} not found"
         )));
@@ -3012,7 +3226,9 @@ pub async fn capture_page_core(
         width: answer.viewport.width,
         height: answer.viewport.height,
     };
-    let (url, _) = handoff::redact_url(&answer.url);
+    // Where the page is, as the agent's host knows it (a remote tab).
+    let page = crate::browser::remote::host_address(profile.as_deref(), &answer.url);
+    let (url, _) = handoff::redact_url(&page);
     let image = draw_capture(
         &surface,
         answer.viewport.width,
@@ -3026,7 +3242,7 @@ pub async fn capture_page_core(
     Ok(handoff::PageHandoff {
         cancelled: false,
         label: String::new(),
-        text: handoff::render_screenshot(&answer.url, &title, region, &image),
+        text: handoff::render_screenshot(&page, &title, region, &image),
         url,
         image: Some(image),
         count: 0,
@@ -3051,13 +3267,25 @@ pub fn page_console_core(
             limit: Some(crate::browser::console::CONSOLE_RING_CAPACITY),
         };
         let readout = tab.console.read(&query, &tab.state.url, |_| true);
-        (tab.state.url.clone(), readout.entries, readout.dropped)
+        (tab.state.url.clone(), readout.entries, readout.dropped, tab.state.profile.clone())
     });
-    let Some((url, mut entries, dropped)) = answer else {
+    let Some((url, entries, dropped, profile)) = answer else {
         return Err(AppCommandError::not_found(format!(
             "browser tab {tab_id} not found"
         )));
     };
+    Ok(console_handoff(profile.as_deref(), &url, entries, dropped, errors_only))
+}
+
+/// The console lines a tab of `profile` read out, as the block that goes to
+/// a conversation.
+fn console_handoff(
+    profile: Option<&str>,
+    url: &str,
+    mut entries: Vec<ConsoleEntry>,
+    dropped: u64,
+    errors_only: bool,
+) -> handoff::PageHandoff {
     // The newest lines, not the oldest: someone handing over a console wants
     // what just happened. What that leaves out is counted with what the ring
     // had already lost, so the block never reads as the whole story when it
@@ -3066,16 +3294,24 @@ pub fn page_console_core(
     if omitted > 0 {
         entries.drain(..omitted);
     }
+    // The page, and the scripts the lines came from, as the agent's host
+    // knows them (a remote tab).
+    let url = crate::browser::remote::host_address(profile, url);
+    for entry in &mut entries {
+        if let Some(script) = entry.url.as_mut() {
+            *script = crate::browser::remote::host_address(profile, script).into_owned();
+        }
+    }
     let text = handoff::render_console(&url, &entries, dropped + omitted as u64, errors_only);
     let (url, _) = handoff::redact_url(&url);
-    Ok(handoff::PageHandoff {
+    handoff::PageHandoff {
         cancelled: false,
         label: String::new(),
         text,
         url,
         image: None,
         count: entries.len(),
-    })
+    }
 }
 
 /// The browser tools an agent gets, answered from this process's tab
@@ -3548,10 +3784,25 @@ pub async fn browser_open_tab(
     folder_id: Option<i64>,
     devtools: Option<bool>,
     profile: Option<String>,
+    egress: Option<i32>,
+    zoom: Option<f64>,
 ) -> Result<BrowserTabState, AppCommandError> {
     // Folder scoping is a frontend concern (tab strip grouping); the backend
     // only needs the owner window.
     let _ = folder_id;
+    let profile = open_tab_profile(profile, egress, || {
+        validate_tab_id(&tab_id)?;
+        parse_web_url(&url).map(|_| ())
+    })?;
+    let profile = match profile {
+        TabProfile::Named(profile) => profile,
+        // The connection's own profile, once its egress is ready: nothing
+        // about the tab may reach this computer instead.
+        TabProfile::Remote(connection_id) => {
+            crate::browser::remote::prepare(&app, &window, connection_id).await?;
+            profile::remote_profile_id(connection_id)
+        }
+    };
     open_tab_core(
         &app,
         &window,
@@ -3563,9 +3814,42 @@ pub async fn browser_open_tab(
             background: background.unwrap_or(false),
             surface: surface.unwrap_or_default(),
             devtools: devtools.unwrap_or(false),
-            profile: profile.unwrap_or_else(|| profile::DEFAULT_PROFILE_ID.to_string()),
+            profile,
+            zoom,
         },
     )
+}
+
+/// The profile a tab asked for from the frontend goes into.
+#[derive(Debug, PartialEq, Eq)]
+enum TabProfile {
+    /// A profile the user has (`default` when the caller has no opinion).
+    Named(String),
+    /// The egress profile of this remote connection.
+    Remote(i32),
+}
+
+/// Sort out `browser_open_tab`'s profile arguments. An `egress` connection
+/// decides the profile by itself; a remote profile named outright is refused
+/// — its proxy is the one thing about it that must not be anything but its
+/// egress, and only `remote::prepare` sets that up. `check` runs first, so an
+/// open that is refused anyway starts no listener and no tunnel.
+fn open_tab_profile(
+    profile: Option<String>,
+    egress: Option<i32>,
+    check: impl FnOnce() -> Result<(), AppCommandError>,
+) -> Result<TabProfile, AppCommandError> {
+    check()?;
+    if let Some(connection_id) = egress {
+        return Ok(TabProfile::Remote(connection_id));
+    }
+    let profile = profile.unwrap_or_else(|| profile::DEFAULT_PROFILE_ID.to_string());
+    if profile::is_remote_profile(&profile) {
+        return Err(AppCommandError::invalid_input(format!(
+            "browser profile {profile:?} is a remote connection's; open the tab with its connection instead"
+        )));
+    }
+    Ok(TabProfile::Named(profile))
 }
 
 #[tauri::command]
@@ -3658,8 +3942,18 @@ pub async fn browser_set_bounds(
     registry: State<'_, BrowserRegistry>,
     tab_id: String,
     bounds: Bounds,
+    zoom: Option<f64>,
 ) -> Result<(), AppCommandError> {
-    set_bounds_core(&registry, &tab_id, bounds)
+    set_bounds_core(&registry, &tab_id, bounds, zoom)
+}
+
+#[tauri::command]
+pub async fn browser_set_window_viewport(
+    registry: State<'_, BrowserRegistry>,
+    tab_id: String,
+    viewport: Option<ViewportSize>,
+) -> Result<(), AppCommandError> {
+    set_window_viewport_core(&registry, &tab_id, viewport)
 }
 
 #[tauri::command]
@@ -3975,11 +4269,115 @@ mod tests {
     }
 
     #[test]
+    fn page_zoom_is_held_to_what_the_engines_take() {
+        assert_eq!(page_zoom(1.0).unwrap(), 1.0);
+        assert_eq!(page_zoom(0.5).unwrap(), 0.5);
+        // A slot too small for the device still gets a page the engine can
+        // draw; it lays out narrower than the device instead.
+        assert_eq!(page_zoom(0.1).unwrap(), MIN_PAGE_ZOOM);
+        assert_eq!(page_zoom(9.0).unwrap(), MAX_PAGE_ZOOM);
+        for bad in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert!(page_zoom(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_window_viewport_has_to_fit_on_a_screen() {
+        let size = |width, height| ViewportSize { width, height };
+        assert!(window_viewport(size(390.0, 844.0)).is_ok());
+        assert!(window_viewport(size(768.0, 1024.0)).is_ok());
+        for bad in [
+            size(0.0, 844.0),
+            size(390.0, -1.0),
+            size(f64::NAN, 844.0),
+            size(390.0, f64::INFINITY),
+            size(100_000.0, 844.0),
+        ] {
+            assert!(window_viewport(bad).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn an_owned_window_takes_the_device_size_and_gives_its_own_back() {
+        let size = |width, height| ViewportSize { width, height };
+        let floor = size(
+            crate::browser::surface_window::MIN_INNER_SIZE.0,
+            crate::browser::surface_window::MIN_INNER_SIZE.1,
+        );
+        let own = size(1100.0, 760.0);
+        let phone = size(390.0, 844.0);
+        let tablet = size(768.0, 1024.0);
+
+        // Desktop → phone: the window's own size is kept, and the floor goes
+        // down to a phone's width so the window can be that narrow.
+        let to_phone = plan_window_viewport(None, None, Some(phone), own);
+        assert_eq!(to_phone.viewport, Some(phone));
+        assert_eq!(to_phone.restore, Some(own));
+        assert_eq!(
+            to_phone.resize,
+            Some(WindowResize {
+                size: phone,
+                min: size(390.0, floor.height),
+            })
+        );
+
+        // Phone → tablet: the size kept is still the window's own, not the
+        // phone's it has now.
+        let to_tablet = plan_window_viewport(Some(phone), Some(own), Some(tablet), phone);
+        assert_eq!(to_tablet.restore, Some(own));
+        assert_eq!(to_tablet.resize.map(|r| r.size), Some(tablet));
+        assert_eq!(to_tablet.resize.map(|r| r.min), Some(floor));
+
+        // Back to desktop: the window's own size and floor again.
+        let back = plan_window_viewport(Some(tablet), Some(own), None, tablet);
+        assert_eq!(back.viewport, None);
+        assert_eq!(back.restore, None);
+        assert_eq!(back.resize, Some(WindowResize { size: own, min: floor }));
+
+        // Asked again for what it already shows: left alone, so a window the
+        // person has since resized by hand stays the way they made it.
+        assert_eq!(
+            plan_window_viewport(Some(phone), Some(own), Some(phone), size(500.0, 900.0)),
+            WindowViewportPlan {
+                viewport: Some(phone),
+                restore: Some(own),
+                resize: None,
+            }
+        );
+        assert_eq!(
+            plan_window_viewport(None, None, None, own),
+            WindowViewportPlan {
+                viewport: None,
+                restore: None,
+                resize: None,
+            }
+        );
+    }
+
+    #[test]
     fn origin_title_hides_path_and_query() {
         let url = Url::parse("https://accounts.example.com/o/oauth2?state=SECRET").unwrap();
         assert_eq!(origin_title(&url), "accounts.example.com");
         let url = Url::parse("http://localhost:3000/app#x").unwrap();
         assert_eq!(origin_title(&url), "localhost:3000");
+    }
+
+    #[test]
+    fn a_tab_goes_into_the_profile_asked_for_or_its_connection_s() {
+        let ok = || Ok(());
+        assert_eq!(open_tab_profile(None, None, ok).unwrap(), TabProfile::Named("default".into()));
+        assert_eq!(
+            open_tab_profile(Some("p-abc".into()), None, ok).unwrap(),
+            TabProfile::Named("p-abc".into())
+        );
+        // The connection decides, whatever profile came along with it.
+        assert_eq!(open_tab_profile(Some("p-abc".into()), Some(4), ok).unwrap(), TabProfile::Remote(4));
+        // A remote profile is never named from outside: only its connection
+        // opens it, after its egress is in place.
+        assert!(open_tab_profile(Some("remote-4".into()), None, ok).is_err());
+        // An open refused anyway is refused before anything is started.
+        let refused = open_tab_profile(None, Some(4), || Err(AppCommandError::invalid_input("bad url")));
+        assert_eq!(refused.unwrap_err().message, "bad url");
     }
 
     #[test]
@@ -4170,6 +4568,43 @@ mod tests {
         assert!(not_found(cancel_pick_core(&registry, "ghost").await.unwrap_err()));
         assert!(not_found(capture_page_core(&registry, "ghost").await.unwrap_err()));
         assert!(not_found(page_console_core(&registry, "ghost", true).unwrap_err()));
+    }
+
+    /// A remote tab's console goes to an agent on the remote host, so the page
+    /// and the scripts the lines came from are named as that host names them,
+    /// not by the alias macOS loaded them by. Any other tab's alias is an
+    /// address someone typed, and stays.
+    #[test]
+    fn a_remote_tab_s_console_names_its_page_as_the_remote_host_does() {
+        let line = |url: &str| ConsoleEntry {
+            seq: 1,
+            at: 0,
+            level: ConsoleLevel::Error,
+            source: crate::browser::console::ConsoleSource::Exception,
+            text: "boom".into(),
+            url: Some(url.into()),
+            line: Some(12),
+            column: Some(5),
+            top: true,
+            origin: None,
+        };
+        let entries = vec![
+            line("http://remote.localhost:3000/src/main.js"),
+            line("https://cdn.example.com/lib.js"),
+        ];
+        let page = "http://remote.localhost:3000/app?token=a";
+
+        let remote = console_handoff(Some("remote-7"), page, entries.clone(), 0, true);
+        assert_eq!(remote.url, "http://localhost:3000/app?token=REDACTED");
+        assert!(remote.text.contains("- page: http://localhost:3000/app?token=REDACTED\n"));
+        assert!(remote.text.contains("(http://localhost:3000/src/main.js:12:5)"));
+        assert!(remote.text.contains("(https://cdn.example.com/lib.js:12:5)"));
+        assert!(!remote.text.contains("remote.localhost"), "{}", remote.text);
+        assert_eq!(remote.count, 2);
+
+        let local = console_handoff(Some("default"), page, entries, 0, true);
+        assert_eq!(local.url, "http://remote.localhost:3000/app?token=REDACTED");
+        assert!(local.text.contains("(http://remote.localhost:3000/src/main.js:12:5)"));
     }
 
     #[test]

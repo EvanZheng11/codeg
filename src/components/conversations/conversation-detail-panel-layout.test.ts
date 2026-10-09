@@ -189,7 +189,6 @@ describe("ConversationDetailPanel new conversation layout", () => {
       '"overflow-hidden rounded-xl transition-colors"'
     )
     expect(messageInputSource).not.toContain("bg-muted/60")
-    expect(messageInputSource).toContain(': "contents"')
     // The rounded border lives in the always-on base (so the active-session flow
     // gradient can overlay a real 1px border without a layout shift); the
     // attached folder-branch-picker treatment still adds a solid surface
@@ -433,14 +432,26 @@ describe("ConversationDetailPanel send-path hardening", () => {
     expect(steerStart).toBeGreaterThan(-1)
     const steerHandler = source.slice(
       steerStart,
-      source.indexOf("[msgQueue, feedbackSteer", steerStart)
+      source.indexOf("\n  return (", steerStart)
     )
-    // Set BEFORE the first await, cleared in a finally.
-    expect(steerHandler.indexOf("setQueueSteerInFlight(true)")).toBeLessThan(
-      steerHandler.indexOf("await feedbackSteer(")
-    )
+    // Set BEFORE the first await, cleared in a finally. Both must be found: a
+    // missing setter's -1 would otherwise pass the ordering check.
+    const holdAt = steerHandler.indexOf("setQueueSteerInFlight(true)")
+    const awaitAt = steerHandler.indexOf("await deliverQueuedSteer(")
+    expect(holdAt).toBeGreaterThan(-1)
+    expect(holdAt).toBeLessThan(awaitAt)
     expect(steerHandler).toContain("finally {")
     expect(steerHandler).toContain("setQueueSteerInFlight(false)")
+    // A turn-end fallback must use the existing mode/readiness/busy handling,
+    // without a second prompt or optimistic-message path in this callback.
+    expect(steerHandler).toContain("() => mqMoveToFront(id)")
+    expect(steerHandler).toContain("if (delivered) mqRemove(id)")
+    // …and still tells the user the row became the next turn, not an insert.
+    expect(steerHandler).toContain(
+      'else toast.info(tCmp("steerQueuedInstead"))'
+    )
+    expect(steerHandler).not.toContain("acpPrompt(")
+    expect(steerHandler).not.toContain("appendOptimisticTurn(")
   })
 
   it("disables the welcome composer while connected-but-not-ready", () => {
