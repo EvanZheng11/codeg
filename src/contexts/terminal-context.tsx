@@ -44,9 +44,7 @@ const TERMINAL_SETTINGS_UPDATED_EVENT = "app://terminal-settings-updated"
 const TERMINAL_SESSION_KEY = "codeg:terminal-session:v1"
 const PAGE_NAME_PREFIX = "codeg-terminal-page:"
 const MAX_STORED_TITLE_LENGTH = 256
-// Up to 15 digits: counting on from any of them stays exact for as many tabs
-// as a page will ever open, so no default title can come out twice.
-const DEFAULT_TITLE = /^Terminal (\d{1,15})$/
+const DEFAULT_TITLE = /^Terminal (\d+)$/
 const UUID_V4 =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
@@ -99,12 +97,18 @@ function storedCommandId(value: unknown): number | undefined {
     : undefined
 }
 
-/** Where default titles resume, so a new tab never repeats one still shown. */
-function restoredTabCounter(tabs: TerminalTab[]): number {
-  let counter = tabs.length
+/**
+ * Where default titles resume, so a new tab never repeats one still shown.
+ * A bigint: a restored title can carry any number, and counting on from it
+ * must stay exact however large it is.
+ */
+function restoredTabCounter(tabs: TerminalTab[]): bigint {
+  let counter = BigInt(tabs.length)
   for (const { title } of tabs) {
-    const n = Number(DEFAULT_TITLE.exec(title)?.[1])
-    if (n) counter = Math.max(counter, n)
+    const digits = DEFAULT_TITLE.exec(title)?.[1]
+    if (digits !== undefined && BigInt(digits) > counter) {
+      counter = BigInt(digits)
+    }
   }
   return counter
 }
@@ -367,28 +371,41 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
     if (!commandTabIds) return
     const unchecked = uncheckedRestoredRef.current
     let disposed = false
+    const listening: string[] = []
     const unlisteners: (() => void)[] = []
-    for (const id of commandTabIds.split(" ")) {
-      getTransport()
-        .subscribe(`terminal://exit/${id}`, () => {
-          if (!disposed) markTerminalExited(id)
-        })
-        .then(async (unlisten) => {
-          if (disposed) return unlisten()
-          unlisteners.push(unlisten)
-          // Asked only once listening, so an end in between is heard anyway.
-          // A missing one is left to its view, which waits out a launch the
-          // reload may have overtaken.
-          if (!unchecked.has(id)) return
-          const snapshot = await terminalSnapshot(id)
+    // Asked only once listening, so an end in between is heard anyway, and
+    // asked again after a reconnect if the asking failed. A missing one is
+    // left to its view, which waits out a launch the reload may have
+    // overtaken.
+    const check = (id: string) => {
+      if (!unchecked.has(id)) return
+      terminalSnapshot(id)
+        .then((snapshot) => {
           if (disposed) return
           unchecked.delete(id)
           if (snapshot.exists && !snapshot.alive) markTerminalExited(id)
         })
         .catch(() => {})
     }
+    for (const id of commandTabIds.split(" ")) {
+      getTransport()
+        .subscribe(`terminal://exit/${id}`, () => {
+          if (!disposed) markTerminalExited(id)
+        })
+        .then((unlisten) => {
+          if (disposed) return unlisten()
+          unlisteners.push(unlisten)
+          listening.push(id)
+          check(id)
+        })
+        .catch(() => {})
+    }
+    const unlistenReady = getTransport().onReady?.(() => {
+      for (const id of listening) check(id)
+    })
     return () => {
       disposed = true
+      unlistenReady?.()
       for (const unlisten of unlisteners) unlisten()
     }
   }, [commandTabIds, markTerminalExited])
@@ -413,7 +430,7 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
 
   const toggle = useCallback(() => {
     const autoId = randomUUID()
-    const nextCounter = tabCounterRef.current + 1
+    const nextCounter = tabCounterRef.current + 1n
 
     setIsOpen((wasOpen) => !wasOpen)
 
@@ -446,7 +463,7 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
       setIsOpen(true)
 
       const id = randomUUID()
-      tabCounterRef.current += 1
+      tabCounterRef.current += 1n
       setTabs((prev) => [
         ...prev,
         {
@@ -473,7 +490,7 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
       setIsOpen(true)
 
       const id = randomUUID()
-      tabCounterRef.current += 1
+      tabCounterRef.current += 1n
       const defaultTitle = `Terminal ${tabCounterRef.current}`
       setTabs((prev) => [
         ...prev,
@@ -509,7 +526,7 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
       setTabs((prev) => {
         const next = prev.filter((t) => t.id !== id)
         if (next.length === 0) {
-          tabCounterRef.current = 0
+          tabCounterRef.current = 0n
           setIsOpen(false)
           setActiveTabId(null)
         } else {
@@ -542,7 +559,7 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
       removeExitedTerminals(prev.map((t) => t.id))
       return []
     })
-    tabCounterRef.current = 0
+    tabCounterRef.current = 0n
     setActiveTabId(null)
     setIsOpen(false)
   }, [killTerminalTabs, removeExitedTerminals])

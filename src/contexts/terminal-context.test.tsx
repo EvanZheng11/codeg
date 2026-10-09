@@ -10,6 +10,7 @@ const h = vi.hoisted(() => ({
   // While set, exit subscriptions wait to be granted (see `grant`).
   holdSubscribe: false,
   grants: [] as (() => void)[],
+  ready: null as (() => void) | null,
   remoteId: null as number | null,
   windowLabel: "main",
   activeFolderId: 7 as number | null,
@@ -33,6 +34,12 @@ vi.mock("@/lib/transport", () => ({
       return new Promise<() => void>((resolve) => {
         h.grants.push(() => resolve(unlisten))
       })
+    },
+    onReady: (callback: () => void) => {
+      h.ready = callback
+      return () => {
+        h.ready = null
+      }
     },
   }),
   getActiveRemoteConnectionId: () => h.remoteId,
@@ -119,6 +126,28 @@ function Probe() {
       >
         Rename huge
       </button>
+      <button
+        onClick={() =>
+          terminal.activeTabId &&
+          terminal.renameTerminal(
+            terminal.activeTabId,
+            "Terminal 999999999999999"
+          )
+        }
+      >
+        Rename 15 digits
+      </button>
+      <button
+        onClick={() =>
+          terminal.activeTabId &&
+          terminal.renameTerminal(
+            terminal.activeTabId,
+            "Terminal 9007199254740993"
+          )
+        }
+      >
+        Rename beyond
+      </button>
       <span data-testid="tabs">{terminal.tabs.length}</span>
       <span data-testid="titles">
         {terminal.tabs.map((tab) => tab.title.length).join(",")}
@@ -150,6 +179,7 @@ describe("TerminalProvider reload recovery", () => {
     h.listeners.clear()
     h.holdSubscribe = false
     h.grants.length = 0
+    h.ready = null
     h.remoteId = null
     h.windowLabel = "main"
     h.activeFolderId = 7
@@ -624,26 +654,76 @@ describe("TerminalProvider reload recovery", () => {
     expect(screen.getByTestId("tabs")).toHaveTextContent("3")
   })
 
-  it("does not count on from a restored number too large to count exactly", () => {
-    const first = render(
-      <TerminalProvider>
-        <Probe />
-      </TerminalProvider>
-    )
+  it("counts on exactly from a restored number of any size", () => {
+    const renderProvider = () =>
+      render(
+        <TerminalProvider>
+          <Probe />
+        </TerminalProvider>
+      )
+    const titles = () => screen.getByTestId("title-text").textContent
+    // A long number restored, counted on from, and restored again.
+    let view = renderProvider()
     fireEvent.click(screen.getByRole("button", { name: "New" }))
-    act(() => {
-      fireEvent.click(screen.getByRole("button", { name: "Rename huge" }))
-    })
-    first.unmount()
+    fireEvent.click(screen.getByRole("button", { name: "Rename 15 digits" }))
+    view.unmount()
+    view = renderProvider()
+    fireEvent.click(screen.getByRole("button", { name: "New" }))
+    view.unmount()
+    view = renderProvider()
+    fireEvent.click(screen.getByRole("button", { name: "New" }))
+    expect(titles()).toBe(
+      "Terminal 999999999999999|Terminal 1000000000000000|Terminal 1000000000000001"
+    )
 
+    // Around the largest exact double: one restored number just below it,
+    // one past it.
+    fireEvent.click(screen.getByRole("button", { name: "Rename huge" }))
+    fireEvent.click(screen.getByRole("button", { name: "New" }))
+    fireEvent.click(screen.getByRole("button", { name: "Rename beyond" }))
+    view.unmount()
+    renderProvider()
+    fireEvent.click(screen.getByRole("button", { name: "New" }))
+    fireEvent.click(screen.getByRole("button", { name: "New" }))
+    expect(titles()).toBe(
+      [
+        "Terminal 999999999999999",
+        "Terminal 1000000000000000",
+        "Terminal 9007199254740991",
+        "Terminal 9007199254740993",
+        "Terminal 9007199254740994",
+        "Terminal 9007199254740995",
+      ].join("|")
+    )
+  })
+
+  it("asks again after a reconnect when asking about a restored command tab failed", async () => {
+    const id = "3f2c1b0a-9e8d-4c7b-a6f5-e4d3c2b1a098"
+    storeCommandTab(id)
+    h.terminalSnapshot.mockRejectedValueOnce(new Error("offline"))
+    h.terminalSnapshot.mockResolvedValue({
+      exists: true,
+      alive: false,
+      data: "done",
+      seq: 1,
+    })
     render(
       <TerminalProvider>
         <Probe />
       </TerminalProvider>
     )
-    fireEvent.click(screen.getByRole("button", { name: "New" }))
-    fireEvent.click(screen.getByRole("button", { name: "New" }))
-    const titles = screen.getByTestId("title-text").textContent!.split("|")
-    expect(new Set(titles).size).toBe(titles.length)
+    await waitFor(() => expect(h.terminalSnapshot).toHaveBeenCalledTimes(1))
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    })
+    expect(screen.getByTestId("exited")).toBeEmptyDOMElement()
+
+    act(() => {
+      h.ready?.()
+    })
+    await waitFor(() =>
+      expect(screen.getByTestId("exited")).toHaveTextContent(id)
+    )
+    expect(h.terminalSnapshot).toHaveBeenCalledTimes(2)
   })
 })
