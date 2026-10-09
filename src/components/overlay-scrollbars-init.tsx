@@ -3,7 +3,10 @@
 import { useEffect } from "react"
 import { usePathname } from "next/navigation"
 import "overlayscrollbars/overlayscrollbars.css"
-import { useOverlayScrollbars } from "overlayscrollbars-react"
+import {
+  useOverlayScrollbars,
+  type UseOverlayScrollbarsParams,
+} from "overlayscrollbars-react"
 
 // Routes whose page is a fixed, viewport-filling shell: the body never
 // scrolls there (every pane scrolls inside itself), so a body-level instance
@@ -22,31 +25,35 @@ function isBodyFixedRoute(pathname: string | null): boolean {
   )
 }
 
+const BODY_SCROLLBARS_OPTIONS: UseOverlayScrollbarsParams["options"] = {
+  scrollbars: {
+    theme: "os-theme-codeg",
+    autoHide: "leave",
+    dragScroll: false,
+  },
+  overflow: { x: "hidden" },
+}
+
 export function OverlayScrollbarsInit() {
   const pathname = usePathname()
-  const [init, instance] = useOverlayScrollbars({
-    options: {
-      scrollbars: {
-        theme: "os-theme-codeg",
-        autoHide: "leave",
-        dragScroll: false,
-      },
-      overflow: { x: "hidden" },
-    },
+  // Follows client-side navigation too: `/` and `/login` route into the
+  // workspace with `router.replace`, which keeps this component mounted.
+  // Arriving there unmounts the instance's owner rather than destroying the
+  // instance, because the init is deferred: one that has not run yet has no
+  // instance to destroy, and only the hook's unmount cleanup cancels it.
+  if (isBodyFixedRoute(pathname)) return null
+  return <BodyOverlayScrollbars />
+}
+
+function BodyOverlayScrollbars() {
+  const [init] = useOverlayScrollbars({
+    options: BODY_SCROLLBARS_OPTIONS,
     defer: true,
   })
 
-  // Follows client-side navigation too: `/` routes into the workspace with
-  // `router.replace`, which keeps this component mounted, so an instance made
-  // on the way in has to be torn down on arrival.
-  const bodyFixed = isBodyFixedRoute(pathname)
   useEffect(() => {
-    if (bodyFixed) {
-      instance()?.destroy()
-      return
-    }
     init(document.body)
-  }, [bodyFixed, init, instance])
+  }, [init])
 
   return null
 }
