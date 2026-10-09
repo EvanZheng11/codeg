@@ -1,6 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 import { TerminalProvider, useTerminalContext } from "./terminal-context"
+import { useCommandTerminalLinkStore } from "@/stores/command-terminal-link-store"
 
 const h = vi.hoisted(() => ({
   terminalKill: vi.fn(async () => {}),
@@ -47,7 +48,7 @@ function Probe() {
     <div>
       <button
         onClick={() => {
-          void terminal.createTerminalWithCommand("Long build", "sleep 120")
+          void terminal.createTerminalWithCommand("Long build", "sleep 120", 42)
         }}
       >
         Run
@@ -67,6 +68,20 @@ function Probe() {
         Open dir
       </button>
       <button
+        onClick={() => {
+          void terminal.createTerminal()
+        }}
+      >
+        New
+      </button>
+      <button
+        onClick={() =>
+          terminal.tabs[0] && terminal.closeTerminal(terminal.tabs[0].id)
+        }
+      >
+        Close first
+      </button>
+      <button
         onClick={() =>
           terminal.activeTabId &&
           terminal.renameTerminal(terminal.activeTabId, "t".repeat(300))
@@ -77,6 +92,9 @@ function Probe() {
       <span data-testid="tabs">{terminal.tabs.length}</span>
       <span data-testid="titles">
         {terminal.tabs.map((tab) => tab.title.length).join(",")}
+      </span>
+      <span data-testid="title-text">
+        {terminal.tabs.map((tab) => tab.title).join("|")}
       </span>
       <span data-testid="active">{terminal.activeTabId ?? ""}</span>
       <span data-testid="command">
@@ -94,6 +112,7 @@ describe("TerminalProvider reload recovery", () => {
     h.activeFolderId = 7
     sessionStorage.clear()
     window.name = ""
+    useCommandTerminalLinkStore.setState({ links: {} })
   })
 
   it("keeps a running command owned by this page and restores its tab after reload", () => {
@@ -310,5 +329,108 @@ describe("TerminalProvider reload recovery", () => {
     expect(screen.getByTestId("tabs")).toHaveTextContent("1")
     expect(screen.getByTestId("active").textContent).toBe(goodId)
     expect(screen.getByTestId("titles")).toHaveTextContent("256")
+  })
+
+  it("restores every tab, however many there are", () => {
+    const first = render(
+      <TerminalProvider>
+        <Probe />
+      </TerminalProvider>
+    )
+    for (let n = 0; n < 40; n++) {
+      fireEvent.click(screen.getByRole("button", { name: "Open dir" }))
+    }
+    expect(screen.getByTestId("tabs")).toHaveTextContent("40")
+    first.unmount()
+
+    render(
+      <TerminalProvider>
+        <Probe />
+      </TerminalProvider>
+    )
+    expect(screen.getByTestId("tabs")).toHaveTextContent("40")
+  })
+
+  it("never repeats a default title a restored tab still shows", () => {
+    const first = render(
+      <TerminalProvider>
+        <Probe />
+      </TerminalProvider>
+    )
+    for (let n = 0; n < 3; n++) {
+      fireEvent.click(screen.getByRole("button", { name: "New" }))
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Close first" }))
+    expect(screen.getByTestId("title-text")).toHaveTextContent(
+      "Terminal 2|Terminal 3"
+    )
+    first.unmount()
+
+    render(
+      <TerminalProvider>
+        <Probe />
+      </TerminalProvider>
+    )
+    fireEvent.click(screen.getByRole("button", { name: "New" }))
+    expect(screen.getByTestId("title-text")).toHaveTextContent(
+      "Terminal 2|Terminal 3|Terminal 4"
+    )
+  })
+
+  it("links the launcher back to a command tab after a reload", () => {
+    // The launcher's links are in memory and a reload starts them empty.
+    // Unless the tab brings its command's id back, the launcher offers to
+    // run a second copy of a command that is still running in it.
+    const first = render(
+      <TerminalProvider>
+        <Probe />
+      </TerminalProvider>
+    )
+    fireEvent.click(screen.getByRole("button", { name: "Run" }))
+    const id = screen.getByTestId("active").textContent
+    first.unmount()
+    useCommandTerminalLinkStore.setState({ links: {} })
+
+    render(
+      <TerminalProvider>
+        <Probe />
+      </TerminalProvider>
+    )
+    expect(useCommandTerminalLinkStore.getState().links).toEqual({ 42: id })
+    expect(sessionStorage.getItem("codeg:terminal-session:v1")).not.toContain(
+      "sleep 120"
+    )
+  })
+
+  it("restores a tab whose stored command link is unusable, without the link", () => {
+    const pageId = "0b6f3d7e-5a1c-4e2b-9f8a-1c2d3e4f5a6b"
+    const id = "3f2c1b0a-9e8d-4c7b-a6f5-e4d3c2b1a098"
+    window.name = `codeg-terminal-page:${pageId}`
+    sessionStorage.setItem(
+      "codeg:terminal-session:v1",
+      JSON.stringify({
+        version: 1,
+        scope: JSON.stringify(["main", null]),
+        pageId,
+        isOpen: true,
+        activeTabId: id,
+        tabs: [
+          {
+            id,
+            folderId: 7,
+            title: "dev",
+            workingDir: "/tmp",
+            commandId: "rm -rf /",
+          },
+        ],
+      })
+    )
+    render(
+      <TerminalProvider>
+        <Probe />
+      </TerminalProvider>
+    )
+    expect(screen.getByTestId("tabs")).toHaveTextContent("1")
+    expect(useCommandTerminalLinkStore.getState().links).toEqual({})
   })
 })

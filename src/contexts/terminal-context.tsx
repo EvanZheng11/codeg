@@ -18,6 +18,7 @@ import { getCurrentWindowLabel } from "@/lib/browser/window-label"
 import { useActiveFolder } from "@/contexts/active-folder-context"
 import { useShortcutSettings } from "@/hooks/use-shortcut-settings"
 import { matchShortcutEvent } from "@/lib/keyboard-shortcuts"
+import { useCommandTerminalLinkStore } from "@/stores/command-terminal-link-store"
 
 export interface TerminalTab {
   id: string
@@ -26,6 +27,8 @@ export interface TerminalTab {
   workingDir: string
   shell?: string
   initialCommand?: string
+  /** The launcher command this tab was started for. Not the command itself. */
+  commandId?: number
   restored?: boolean
 }
 
@@ -36,15 +39,17 @@ const TERMINAL_SETTINGS_UPDATED_EVENT = "app://terminal-settings-updated"
 
 const TERMINAL_SESSION_KEY = "codeg:terminal-session:v1"
 const PAGE_NAME_PREFIX = "codeg-terminal-page:"
-const MAX_STORED_TABS = 32
 const MAX_STORED_TITLE_LENGTH = 256
+const DEFAULT_TITLE = /^Terminal (\d+)$/
 const UUID_V4 =
   /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
+/** `commandId` is judged on its own: a bad one costs the tab its link to a
+ *  launcher command, not its way back to its PTY. */
 type StoredTerminalTab = Pick<
   TerminalTab,
   "id" | "folderId" | "title" | "workingDir" | "shell"
->
+> & { commandId?: unknown }
 
 interface StoredTerminalSession {
   version: 1
@@ -81,6 +86,22 @@ function isRestorableTab(tab: unknown): tab is StoredTerminalTab {
     /^(\/|[A-Za-z]:[\\/]|\\\\)/.test(workingDir) &&
     (shell === undefined || (typeof shell === "string" && shell.length <= 512))
   )
+}
+
+function storedCommandId(value: unknown): number | undefined {
+  return Number.isSafeInteger(value) && (value as number) >= 0
+    ? (value as number)
+    : undefined
+}
+
+/** Where default titles resume, so a new tab never repeats one still shown. */
+function restoredTabCounter(tabs: TerminalTab[]): number {
+  let counter = tabs.length
+  for (const { title } of tabs) {
+    const n = Number(DEFAULT_TITLE.exec(title)?.[1])
+    if (Number.isSafeInteger(n)) counter = Math.max(counter, n)
+  }
+  return counter
 }
 
 function terminalScope(): string {
@@ -124,8 +145,7 @@ function readTerminalSession(): {
       saved.version !== 1 ||
       saved.scope !== scope ||
       saved.pageId !== pageId ||
-      !Array.isArray(saved.tabs) ||
-      saved.tabs.length > MAX_STORED_TABS
+      !Array.isArray(saved.tabs)
     )
       return empty
     const tabs: TerminalTab[] = (saved.tabs as unknown[])
@@ -136,6 +156,7 @@ function readTerminalSession(): {
         title: tab.title.slice(0, MAX_STORED_TITLE_LENGTH),
         workingDir: tab.workingDir,
         shell: tab.shell,
+        commandId: storedCommandId(tab.commandId),
         restored: true,
       }))
     return {
@@ -173,7 +194,8 @@ interface TerminalContextValue {
   ) => Promise<string | null>
   createTerminalWithCommand: (
     title: string,
-    command: string
+    command: string,
+    commandId?: number
   ) => Promise<string | null>
   closeTerminal: (id: string) => void
   closeOtherTerminals: (id: string) => void
@@ -202,7 +224,7 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
   const [activeTabId, setActiveTabId] = useState<string | null>(
     restoredSession.activeTabId
   )
-  const tabCounterRef = useRef(restoredSession.tabs.length)
+  const tabCounterRef = useRef(restoredTabCounter(restoredSession.tabs))
   const [exitedTerminals, setExitedTerminals] = useState<Set<string>>(new Set())
   const [defaultTerminalShell, setDefaultTerminalShell] = useState<
     string | null
@@ -220,9 +242,10 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
       activeTabId,
       // The command is intentionally never stored: recovery only attaches to
       // the existing PTY and must not retain sensitive command arguments.
-      tabs: tabs
-        .slice(0, MAX_STORED_TABS)
-        .map(({ id, folderId, title, workingDir, shell }) => ({
+      // Its launcher entry's id is only a number, and is what lets the
+      // launcher find the tab again.
+      tabs: tabs.map(
+        ({ id, folderId, title, workingDir, shell, commandId }) => ({
           id,
           folderId,
           // A rename or a long folder name can run past the reader's bound.
@@ -230,7 +253,9 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
           title: title.slice(0, MAX_STORED_TITLE_LENGTH),
           workingDir,
           shell,
-        })),
+          commandId,
+        })
+      ),
     }
     try {
       window.sessionStorage.setItem(TERMINAL_SESSION_KEY, JSON.stringify(state))
@@ -238,6 +263,16 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
       // Private mode or quota failure: terminal remains usable in this page.
     }
   }, [restoredSession, isOpen, activeTabId, tabs])
+
+  // The launcher's command↔terminal links live in memory. Rebuilt from the
+  // restored tabs, a command still running in one reads as running, rather
+  // than offering to start a second copy beside it.
+  useEffect(() => {
+    const { setLink } = useCommandTerminalLinkStore.getState()
+    for (const tab of restoredSession.tabs) {
+      if (tab.commandId !== undefined) setLink(tab.commandId, tab.id)
+    }
+  }, [restoredSession])
 
   const folderPath = activeFolder?.path ?? ""
   const currentFolderId = activeFolderId ?? 0
@@ -355,7 +390,7 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
   }, [folderPath, currentFolderId, resolveTerminalShell])
 
   const createTerminalWithCommand = useCallback(
-    async (title: string, command: string) => {
+    async (title: string, command: string, commandId?: number) => {
       if (!folderPath) return null
 
       setIsOpen(true)
@@ -371,6 +406,7 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
           workingDir: folderPath,
           shell: resolveTerminalShell(),
           initialCommand: command,
+          commandId,
         },
       ])
       setActiveTabId(id)
