@@ -220,12 +220,10 @@ pub(crate) fn resolve_system_agent_binary(cmd: &str) -> Option<PathBuf> {
     if let Some(path) = resolve_command_on_path(cmd) {
         return Some(path);
     }
-    let exe = if cfg!(windows) {
-        format!("{cmd}.exe")
-    } else {
-        cmd.to_string()
-    };
-    let cand = home_dir_or_default().join(".local").join("bin").join(exe);
+    let cand = home_dir_or_default()
+        .join(".local")
+        .join("bin")
+        .join(binary_cache::executable_file_name(cmd));
     cand.is_file().then_some(cand)
 }
 
@@ -241,11 +239,7 @@ pub(crate) fn resolve_system_agent_binary_for(agent_type: AgentType, cmd: &str) 
     if let Some(path) = resolve_system_agent_binary(cmd) {
         return Some(path);
     }
-    let exe = if cfg!(windows) {
-        format!("{cmd}.exe")
-    } else {
-        cmd.to_string()
-    };
+    let exe = binary_cache::executable_file_name(cmd);
     let home = home_dir_or_default();
     registry::binary_system_dirs(agent_type).iter().find_map(|dir| {
         let cand = home.join(dir).join(&exe);

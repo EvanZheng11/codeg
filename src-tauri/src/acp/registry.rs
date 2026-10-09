@@ -16,7 +16,10 @@ pub enum AgentDistribution {
         version: &'static str,
         /// Command name on PATH (fallback launch + `which` probes). For
         /// single-file archives this is also the file name copied out of the
-        /// archive into the cache.
+        /// archive into the cache. On Windows a bare command (every built-in)
+        /// gets `.exe` appended, while one that already ends in `.exe` (a
+        /// custom agent's registry entry) is used as-is: see
+        /// `binary_cache::executable_file_name`.
         cmd: &'static str,
         args: &'static [&'static str],
         env: &'static [(&'static str, &'static str)],
