@@ -897,7 +897,7 @@ mod tests {
             pending: vec![remote(1), remote(2)],
             ..SessionState::default()
         };
-        // Remote 2 is opened by hand before its (failed) check is processed.
+        // Remote 2 is opened by hand before its build failure is processed.
         state.mark_open(remote(2));
         state.complete_restore();
         assert_eq!(state.snapshot(), vec![remote(1), remote(2)]);
@@ -1023,6 +1023,40 @@ mod tests {
         let restore = load_restore(&db.conn, false, true).await;
         assert_eq!(restore.plan.remotes, vec![a.id, b.id]);
         assert_eq!(restore.plan.front, remote(b.id));
+    }
+
+    #[tokio::test]
+    async fn an_offline_remote_shell_survives_quit_but_an_explicit_close_does_not() {
+        let db = fresh_in_memory_db().await;
+        // Restoring a saved shell must not contact this unreachable host.
+        let connection = remote_workspace_connection_service::create(
+            &db.conn,
+            "offline",
+            "http://127.0.0.1:1",
+            "token",
+            &[],
+        )
+        .await
+        .unwrap();
+        let window = remote(connection.id);
+        let session = WorkspaceWindowSession::new();
+        session.apply(|state| state.mark_open(window));
+        session.freeze();
+        session.write_latest(&db.conn).await;
+        let restore = load_restore(&db.conn, false, true).await;
+        assert!(!restore.show_local());
+        assert_eq!(restore.plan.remotes, vec![connection.id]);
+
+        // A shell closing deliberately while the server remains unavailable
+        // still leaves the session. We do not revive every saved connection.
+        let closed_session = WorkspaceWindowSession::new();
+        closed_session.apply(|state| state.mark_open(window));
+        closed_session.apply(|state| state.mark_closed(window));
+        closed_session.freeze();
+        closed_session.write_latest(&db.conn).await;
+        let restore = load_restore(&db.conn, false, true).await;
+        assert!(restore.show_local());
+        assert!(restore.plan.remotes.is_empty());
     }
 
     #[tokio::test]
