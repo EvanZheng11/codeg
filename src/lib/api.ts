@@ -4741,8 +4741,18 @@ export async function terminalSnapshot(
   return getTransport().call("terminal_snapshot", { terminalId })
 }
 
+/** Close a terminal: ends its process and forgets it, output included. */
 export async function terminalKill(terminalId: string): Promise<void> {
   return getTransport().call("terminal_kill", { terminalId })
+}
+
+/**
+ * End a terminal's process but keep the terminal: its final output stays on
+ * the backend for the tab still showing it, as after a natural exit, until
+ * `terminalKill` closes it. A server without `keepOutput` closes it instead.
+ */
+export async function terminalStop(terminalId: string): Promise<void> {
+  return getTransport().call("terminal_kill", { terminalId, keepOutput: true })
 }
 
 export async function terminalList(): Promise<TerminalInfo[]> {

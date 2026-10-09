@@ -20,11 +20,11 @@ pub struct TerminalEvent {
     pub generation: String,
 }
 
-/// Recent output of a live or recently completed terminal plus its cursor —
-/// the re-attach payload behind `terminal_snapshot`.
+/// Recent output of a live or completed terminal plus its cursor — the
+/// re-attach payload behind `terminal_snapshot`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TerminalSnapshot {
-    /// Whether a live or recently completed PTY with this id is known.
+    /// Whether a live or completed PTY with this id is known.
     pub exists: bool,
     /// Exit status retained with the completed output, if the child reported it.
     pub exit_code: Option<u32>,
@@ -39,6 +39,11 @@ pub struct TerminalSnapshot {
     pub data: String,
     /// The `seq` of the last chunk included in `data`.
     pub seq: u64,
+    /// The PTY's size, which `data` was laid out for. A viewer replays it at
+    /// this size: drawn narrower, a full-width line (zsh's end-of-output
+    /// mark pads to the right edge) wraps and leaves a stray line behind.
+    pub cols: Option<u16>,
+    pub rows: Option<u16>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

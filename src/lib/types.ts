@@ -4423,7 +4423,7 @@ export interface TerminalEvent {
   generation?: string
 }
 
-/** Recent output of a live or recently completed terminal.
+/** Recent output of a live or completed terminal.
  *  When `alive` is false, `exists` distinguishes retained final output
  *  from a missing session. */
 export interface TerminalSnapshot {
@@ -4435,6 +4435,9 @@ export interface TerminalSnapshot {
   alive: boolean
   data: string
   seq: number
+  /** The PTY's size, which `data` was laid out for. Absent on old servers. */
+  cols?: number | null
+  rows?: number | null
 }
 
 export interface TokenBreakdown {

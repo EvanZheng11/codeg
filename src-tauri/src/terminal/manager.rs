@@ -19,8 +19,6 @@ use crate::web::event_bridge::EventEmitter;
 /// to cover a screenful of `ls -R` or a compile log, not a whole session: this
 /// is a "pick the pane back up where you left it" buffer, not a transcript.
 const SCROLLBACK_MAX_CHARS: usize = 128 * 1024;
-const COMPLETED_MAX_COUNT: usize = 64;
-const COMPLETED_TTL: Duration = Duration::from_secs(10 * 60);
 const CANCELLED_SPAWN_TTL: Duration = Duration::from_secs(30);
 const CANCELLED_SPAWN_MAX_COUNT: usize = 128;
 
@@ -101,73 +99,87 @@ impl Drop for SpawnReservation {
     }
 }
 
+/// A terminal whose process has ended (or is being ended by
+/// [`TerminalManager::stop`]), kept so its pane can still be drawn: by a
+/// reloaded panel tab, a remounted canvas card, or a viewer that reconnects.
 struct CompletedTerminal {
     scrollback: Arc<Mutex<Scrollback>>,
     owner_window_label: String,
     generation: String,
-    child: Box<dyn portable_pty::Child + Send>,
+    /// `None` once whoever is ending the process has taken it to reap.
+    child: Option<Box<dyn portable_pty::Child + Send>>,
     exit_code: Option<u32>,
-    finished_at: Instant,
+    /// The PTY's size when it ended: the geometry its output was drawn for.
+    size: Option<PtySize>,
 }
 
+impl CompletedTerminal {
+    /// The record of `instance`, and its child — which the caller either
+    /// keeps with the record or ends itself.
+    fn from_instance(
+        mut instance: TerminalInstance,
+        exit_code: Option<u32>,
+    ) -> (Self, Box<dyn portable_pty::Child + Send>) {
+        cleanup_temp_files(&mut instance.temp_files);
+        let entry = Self {
+            size: instance.master.get_size().ok(),
+            scrollback: instance.scrollback,
+            owner_window_label: instance.owner_window_label,
+            generation: instance.generation,
+            child: None,
+            exit_code,
+        };
+        (entry, instance._child)
+    }
+}
+
+/// Ended terminals, each kept for as long as something may still show it —
+/// not for a fixed time or up to a fixed count. A record goes when its
+/// terminal is closed ([`TerminalManager::kill`]), when a new process takes
+/// its id, or when its window's terminals are reclaimed. The output of a
+/// command that finished while its page was away is what a reload is for.
 #[derive(Default)]
 struct CompletedTerminals {
     entries: HashMap<String, CompletedTerminal>,
-    order: VecDeque<String>,
 }
 
 impl CompletedTerminals {
-    fn prune(&mut self) {
-        let now = Instant::now();
-        while let Some(id) = self.order.front() {
-            if self.order.len() <= COMPLETED_MAX_COUNT
-                && self
-                    .entries
-                    .get(id)
-                    .is_some_and(|entry| now.duration_since(entry.finished_at) < COMPLETED_TTL)
-            {
-                break;
-            }
-            let id = self.order.pop_front().expect("front exists");
-            self.remove(&id);
-        }
+    /// Record a terminal whose process has ended, or may have: its child
+    /// stays with the record, to be reaped once it exits.
+    fn insert(&mut self, id: String, instance: TerminalInstance, exit_code: Option<u32>) {
+        let (mut entry, child) = CompletedTerminal::from_instance(instance, exit_code);
+        entry.child = Some(child);
+        self.remove(&id);
+        self.entries.insert(id, entry);
     }
 
-    fn insert(&mut self, id: String, mut instance: TerminalInstance, exit_code: Option<u32>) {
-        cleanup_temp_files(&mut instance.temp_files);
+    /// Record a terminal the caller is about to end, handing its child back
+    /// so the kill and the wait for it happen outside this table's lock.
+    fn insert_ending(
+        &mut self,
+        id: String,
+        instance: TerminalInstance,
+    ) -> Box<dyn portable_pty::Child + Send> {
+        let (entry, child) = CompletedTerminal::from_instance(instance, None);
         self.remove(&id);
-        self.order.push_back(id.clone());
-        self.entries.insert(
-            id,
-            CompletedTerminal {
-                scrollback: instance.scrollback.clone(),
-                owner_window_label: instance.owner_window_label.clone(),
-                generation: instance.generation.clone(),
-                child: instance._child,
-                exit_code,
-                finished_at: Instant::now(),
-            },
-        );
-        self.prune();
+        self.entries.insert(id, entry);
+        child
     }
 
     fn remove(&mut self, id: &str) -> bool {
-        let removed = self.entries.remove(id);
-        if let Some(mut entry) = removed {
-            if entry.exit_code.is_none() {
-                // Reap it if it has exited since, so it leaves no zombie, but
-                // never kill it. Reader EOF does not prove the process ended:
-                // a child can close its terminal and keep running, and such a
-                // process was always left alone once its PTY closed. Dropping
-                // a cache entry must not be what ends it — and a kill + wait
-                // here would stall every caller holding the terminal table.
-                let _ = entry.child.try_wait();
-            }
-            self.order.retain(|entry_id| entry_id != id);
-            true
-        } else {
-            false
+        let Some(mut entry) = self.entries.remove(id) else {
+            return false;
+        };
+        if let (None, Some(child)) = (entry.exit_code, entry.child.as_mut()) {
+            // Reap it if it has exited since, so it leaves no zombie, but
+            // never kill it. Reader EOF does not prove the process ended:
+            // a child can close its terminal and keep running, and such a
+            // process was always left alone once its PTY closed. Dropping
+            // a cache entry must not be what ends it — and a kill + wait
+            // here would stall every caller holding the terminal table.
+            let _ = child.try_wait();
         }
+        true
     }
 }
 
@@ -610,7 +622,7 @@ impl TerminalManager {
     pub fn snapshot(&self, terminal_id: &str) -> TerminalSnapshot {
         // The active→completed transfer happens under the active map lock, so
         // a snapshot never mistakes an exiting PTY for a missing one.
-        let (buffer, alive, exit_code, generation) = {
+        let (buffer, alive, exit_code, generation, size) = {
             let terminals = lock_terminals(&self.terminals);
             if let Some(instance) = terminals.get(terminal_id) {
                 (
@@ -618,15 +630,14 @@ impl TerminalManager {
                     true,
                     None,
                     Some(instance.generation.clone()),
+                    instance.master.get_size().ok(),
                 )
             } else {
                 let mut completed = lock_completed(&self.completed);
-                completed.prune();
                 match completed.entries.get_mut(terminal_id) {
                     Some(entry) => {
-                        if entry.exit_code.is_none() {
-                            entry.exit_code = entry
-                                .child
+                        if let (None, Some(child)) = (entry.exit_code, entry.child.as_mut()) {
+                            entry.exit_code = child
                                 .try_wait()
                                 .ok()
                                 .flatten()
@@ -637,9 +648,10 @@ impl TerminalManager {
                             false,
                             entry.exit_code,
                             Some(entry.generation.clone()),
+                            entry.size,
                         )
                     }
-                    None => (None, false, None, None),
+                    None => (None, false, None, None, None),
                 }
             }
         };
@@ -651,6 +663,8 @@ impl TerminalManager {
                 seq: 0,
                 exit_code: None,
                 generation: None,
+                cols: None,
+                rows: None,
             };
         };
         let (data, seq) = buffer
@@ -664,22 +678,54 @@ impl TerminalManager {
             seq,
             exit_code,
             generation,
+            cols: size.map(|size| size.cols),
+            rows: size.map(|size| size.rows),
         }
     }
 
+    /// Close a terminal: end its process and forget it, final output included.
     pub fn kill(&self, terminal_id: &str) -> Result<(), TerminalError> {
+        self.end(terminal_id, false)
+    }
+
+    /// End a terminal's process but keep its record, as if it had exited on
+    /// its own: the final output stays there for any viewer — a reloaded tab
+    /// included — until the terminal is closed with [`Self::kill`].
+    pub fn stop(&self, terminal_id: &str) -> Result<(), TerminalError> {
+        self.end(terminal_id, true)
+    }
+
+    fn end(&self, terminal_id: &str, keep_record: bool) -> Result<(), TerminalError> {
         let mut terminals = lock_terminals(&self.terminals);
         if let Some(mut instance) = terminals.remove(terminal_id) {
-            lock_completed(&self.completed).remove(terminal_id);
-            drop(terminals);
-            terminate_terminal(&mut instance);
+            if keep_record {
+                // Recorded before the table lock is released, so no snapshot
+                // finds this id in neither table while the process dies.
+                let mut child = lock_completed(&self.completed)
+                    .insert_ending(terminal_id.to_string(), instance);
+                drop(terminals);
+                let _ = child.kill();
+                let _ = child.wait();
+            } else {
+                lock_completed(&self.completed).remove(terminal_id);
+                drop(terminals);
+                terminate_terminal(&mut instance);
+            }
             return Ok(());
         }
-        if lock_completed(&self.completed).remove(terminal_id) {
-            return Ok(());
+        {
+            let mut completed = lock_completed(&self.completed);
+            if completed.entries.contains_key(terminal_id) {
+                // It has ended already. A stop leaves that as it is; a close
+                // forgets it.
+                if !keep_record {
+                    completed.remove(terminal_id);
+                }
+                return Ok(());
+            }
         }
-        // A close can overtake an in-flight spawn request (or arrive just
-        // before it). Remember only random terminal IDs, for a short bounded
+        // A close (or stop) can overtake an in-flight spawn request, or arrive
+        // just before it. Remember only random terminal IDs, for a short bounded
         // interval. The later insert consumes this reservation atomically under
         // the terminal map lock; ordinary view unmount never calls kill.
         if uuid::Uuid::parse_str(terminal_id).is_ok() {
@@ -821,20 +867,23 @@ impl TerminalManager {
                 })
                 .collect();
 
-            let mut removed = Vec::with_capacity(ids.len());
-            for id in ids {
-                if let Some(instance) = terminals.remove(&id) {
-                    removed.push(instance);
-                }
-            }
             let spawning = self.spawning.lock().unwrap_or_else(|p| p.into_inner());
             let mut pending = self
                 .cancelled_spawns
                 .lock()
                 .unwrap_or_else(|p| p.into_inner());
             for (id, owner) in spawning.iter() {
-                if owner == owner_window_label {
+                // A launch still holds its reservation for a moment after its
+                // terminal is in the table. That one is ended below; a mark
+                // for it would only linger and refuse the id's next launch.
+                if owner == owner_window_label && !terminals.contains_key(id) {
                     pending.insert(id.clone(), Instant::now());
+                }
+            }
+            let mut removed = Vec::with_capacity(ids.len());
+            for id in ids {
+                if let Some(instance) = terminals.remove(&id) {
+                    removed.push(instance);
                 }
             }
             removed
@@ -870,7 +919,10 @@ impl TerminalManager {
                 .lock()
                 .unwrap_or_else(|p| p.into_inner());
             for id in spawning.keys() {
-                pending.insert(id.clone(), Instant::now());
+                // As in `kill_by_owner_window`: only launches not yet in the table.
+                if !terminals.contains_key(id) {
+                    pending.insert(id.clone(), Instant::now());
+                }
             }
             terminals.drain().map(|(_, inst)| inst).collect()
         };
@@ -1131,21 +1183,21 @@ mod tests {
     #[test]
     fn a_completed_entry_never_ends_a_process_whose_exit_it_did_not_see() {
         // Reader EOF only says the PTY closed: a child can close its terminal
-        // and keep running. However its cache entry goes — an explicit close,
-        // a count prune, a window's bulk kill, the quit — the process it names
-        // must be left running, as it was before the cache existed.
+        // and keep running. However its record goes — an explicit close, a
+        // window's bulk kill, the quit — the process it names must be left
+        // running, as it was before the records existed. A stop of a
+        // terminal that already ended changes nothing.
         use std::sync::atomic::{AtomicBool, Ordering};
 
         let manager = super::TerminalManager::new();
         let mut flags = Vec::new();
         {
             let mut completed = super::lock_completed(&manager.completed);
-            for n in 0..=super::COMPLETED_MAX_COUNT + 1 {
+            for n in 0..4 {
                 let id = format!("detached-{n}");
                 let owner = if n % 2 == 0 { "main" } else { "other" };
                 let ended = std::sync::Arc::new(AtomicBool::new(false));
                 flags.push((id.clone(), ended.clone()));
-                completed.order.push_back(id.clone());
                 completed.entries.insert(
                     id,
                     super::CompletedTerminal {
@@ -1154,20 +1206,19 @@ mod tests {
                         )),
                         owner_window_label: owner.to_string(),
                         generation: "generation".to_string(),
-                        child: Box::new(UnobservedChild { ended }),
+                        child: Some(Box::new(UnobservedChild { ended })),
                         exit_code: None,
-                        finished_at: std::time::Instant::now(),
+                        size: None,
                     },
                 );
             }
         }
 
-        // Over the count bound: the snapshot's prune evicts the oldest.
-        let _ = manager.snapshot("unknown");
-        let last = format!("detached-{}", super::COMPLETED_MAX_COUNT + 1);
         manager
-            .kill(&last)
-            .expect("explicit close of a completed entry");
+            .stop("detached-1")
+            .expect("stop of an ended terminal");
+        assert!(manager.snapshot("detached-1").exists, "a stop forgot it");
+        manager.kill("detached-3").expect("explicit close");
         manager.kill_by_owner_window("main");
         manager.kill_all();
 
@@ -1175,9 +1226,127 @@ mod tests {
         for (id, ended) in flags {
             assert!(
                 !ended.load(Ordering::SeqCst),
-                "{id}: dropping its cache entry ended a process still running"
+                "{id}: dropping its record ended a process still running"
             );
         }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn sleeping_shell(id: &str, command: &str) -> SpawnOptions {
+        SpawnOptions {
+            terminal_id: id.to_string(),
+            working_dir: std::env::temp_dir().to_string_lossy().to_string(),
+            owner_window_label: "main".to_string(),
+            shell: Some("/bin/sh".to_string()),
+            initial_command: Some(command.to_string()),
+            extra_env: None,
+            temp_files: vec![],
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn a_stopped_terminal_keeps_its_output_until_it_is_closed() {
+        // The command launcher's Stop ends the process but leaves the tab
+        // open, so a reload of that tab must find the output it showed —
+        // not "unavailable", which is what forgetting the terminal leaves.
+        use std::time::{Duration, Instant};
+
+        let manager = TerminalManager::new();
+        let id = "stopped-output";
+        manager
+            .spawn_with_id(
+                sleeping_shell(id, "printf 'stop-marker\\n'; sleep 30"),
+                EventEmitter::Noop,
+            )
+            .expect("spawn");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !manager.snapshot(id).data.contains("stop-marker") {
+            assert!(Instant::now() < deadline, "no output to keep");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+
+        manager.stop(id).expect("stop");
+        let stopped = manager.snapshot(id);
+        assert!(stopped.exists, "the stop forgot the terminal");
+        assert!(!stopped.alive);
+        assert!(stopped.data.contains("stop-marker"));
+        // Ended by us, not by itself: no exit status to report.
+        assert_eq!(stopped.exit_code, None);
+        assert!(super::lock_terminals(&manager.terminals).is_empty());
+
+        manager.kill(id).expect("close");
+        assert!(!manager.snapshot(id).exists);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn a_snapshot_reports_the_size_its_output_was_drawn_for() {
+        let manager = TerminalManager::new();
+        let id = "sized-output";
+        manager
+            .spawn_with_id(sleeping_shell(id, "sleep 30"), EventEmitter::Noop)
+            .expect("spawn");
+        manager.resize(id, 133, 41).expect("resize");
+        let live = manager.snapshot(id);
+        assert_eq!((live.cols, live.rows), (Some(133), Some(41)));
+
+        // Kept with the record once the process has ended.
+        manager.stop(id).expect("stop");
+        let ended = manager.snapshot(id);
+        assert!(!ended.alive);
+        assert_eq!((ended.cols, ended.rows), (Some(133), Some(41)));
+        manager.kill(id).expect("close");
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn bulk_kills_mark_only_launches_not_yet_in_the_table() {
+        // A launch keeps its reservation for a moment after inserting its
+        // terminal. A bulk kill in that moment ends the terminal itself; a
+        // cancellation mark for it would outlive it and refuse the next
+        // launch of that id.
+        let manager = TerminalManager::new();
+        let pending = |manager: &TerminalManager| {
+            manager
+                .cancelled_spawns
+                .lock()
+                .unwrap()
+                .keys()
+                .cloned()
+                .collect::<std::collections::HashSet<_>>()
+        };
+        let reserve = |manager: &TerminalManager, id: &str| {
+            manager
+                .spawning
+                .lock()
+                .unwrap()
+                .insert(id.to_string(), "main".to_string());
+        };
+
+        manager
+            .spawn_with_id(sleeping_shell("inserted", "sleep 30"), EventEmitter::Noop)
+            .expect("spawn");
+        reserve(&manager, "inserted");
+        reserve(&manager, "launching");
+        manager.kill_by_owner_window("main");
+        assert_eq!(
+            pending(&manager),
+            std::collections::HashSet::from(["launching".to_string()])
+        );
+
+        manager.cancelled_spawns.lock().unwrap().clear();
+        manager.spawning.lock().unwrap().clear();
+        manager
+            .spawn_with_id(sleeping_shell("inserted", "sleep 30"), EventEmitter::Noop)
+            .expect("spawn again");
+        reserve(&manager, "inserted");
+        reserve(&manager, "launching");
+        manager.kill_all();
+        assert_eq!(
+            pending(&manager),
+            std::collections::HashSet::from(["launching".to_string()])
+        );
     }
 
     #[cfg(not(target_os = "windows"))]
