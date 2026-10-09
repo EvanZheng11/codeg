@@ -342,7 +342,12 @@ describe("RemoteDesktopTransport lifecycle", () => {
       void transport.subscribe("acp://event", vi.fn()).then(subscribed)
       await flush()
       emit({ channel, payload: null })
-      if (channel === "__retries_exhausted__") transport.reconnectNow()
+      if (channel === "__retries_exhausted__") {
+        transport.reconnectNow()
+        await flush()
+        // The ready below answers this retry's subscription, not the first.
+        expect(commandCalls("remote_ws_subscribe")).toHaveLength(2)
+      }
       await flush()
       expect(onReconnect).not.toHaveBeenCalled()
       expect(subscribed).not.toHaveBeenCalled()
@@ -529,6 +534,8 @@ describe("RemoteDesktopTransport manual retry", () => {
     )
     transport.reconnectNow()
     await flush()
+    // The retry, not destroy() below, is what is waiting on the unsubscribe.
+    expect(commandCalls("remote_ws_unsubscribe")).toHaveLength(1)
     transport.destroy()
     finishUnsubscribe()
     await flush()
@@ -561,11 +568,18 @@ describe("RemoteDesktopTransport manual retry", () => {
       transport.reconnectNow()
       await flush()
 
+      // The retry reached the failing command, and the failure ended it.
+      expect(failOnce).toBe(false)
       expect(transport.getConnectionSnapshot()).toBe("disconnected")
       expect(transport.eventStream()).toBe(stream)
       expect(sentFrames()).toHaveLength(1)
+      const subscribesBefore = commandCalls("remote_ws_subscribe").length
       transport.reconnectNow()
       await flush()
+      expect(transport.getConnectionSnapshot()).toBe("reconnecting")
+      expect(commandCalls("remote_ws_subscribe")).toHaveLength(
+        subscribesBefore + 1
+      )
       ready()
       expect(transport.getConnectionSnapshot()).toBe("connected")
       expect(lastSentFrame()).toEqual({
