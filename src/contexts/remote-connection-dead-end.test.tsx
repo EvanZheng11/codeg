@@ -26,9 +26,15 @@ vi.mock("next/navigation", () => {
 vi.mock("@/lib/transport", () => ({
   clearRemoteDesktopTransport: vi.fn(),
   configureRemoteDesktopTransport: mocks.configureRemoteDesktopTransport,
+  getTransport: vi.fn(),
 }))
 
 vi.mock("@/lib/platform", () => ({ isDesktop: () => mocks.desktop }))
+
+// The gate shows the connection pill while it lets the workspace through.
+vi.mock("@/components/connection/remote-connection-status", () => ({
+  RemoteConnectionStatus: () => null,
+}))
 
 vi.mock("@/lib/remote-workspace", () => ({
   getRemoteWorkspaceConnection: mocks.getRemoteWorkspaceConnection,

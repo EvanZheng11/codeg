@@ -16,7 +16,10 @@ import { Button } from "@/components/ui/button"
 import {
   clearRemoteDesktopTransport,
   configureRemoteDesktopTransport,
+  getTransport,
 } from "@/lib/transport"
+import type { RemoteDesktopTransport } from "@/lib/transport/remote-desktop-transport"
+import { RemoteConnectionStatus } from "@/components/connection/remote-connection-status"
 import { resetBackendScopedStores } from "@/stores/backend-scoped-store-reset"
 import {
   getRemoteWorkspaceConnection,
@@ -158,6 +161,8 @@ export function RemoteConnectionGate({ children }: { children: ReactNode }) {
           baseUrl: next.base_url,
           token: next.token,
           windowInstanceId: remoteWindowId,
+          // Only a refused token. A socket that is down keeps the workspace
+          // mounted while it retries; `RemoteConnectionStatus` shows that.
           onUnauthorized: () =>
             setState((prev) => ({ ...prev, expired: true })),
         })
@@ -264,6 +269,11 @@ export function RemoteConnectionGate({ children }: { children: ReactNode }) {
   return (
     <RemoteConnectionContext.Provider value={value}>
       {children}
+      {hasRemoteConnection && (
+        <RemoteConnectionStatus
+          transport={getTransport() as RemoteDesktopTransport}
+        />
+      )}
     </RemoteConnectionContext.Provider>
   )
 }
