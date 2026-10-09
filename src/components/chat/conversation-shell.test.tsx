@@ -89,9 +89,10 @@ describe("who turns the handles on", () => {
   it("is the conversation tab, not the zoomable canvas card", () => {
     // Canvas cards render the shell under the board's scale transform, where
     // the handles' pointer maths would be off by the zoom factor.
+    // Boolean shorthand only: `resizableWidth={false}` must not pass.
     expect(
       read("src/components/conversations/conversation-detail-panel.tsx")
-    ).toMatch(/<ConversationShell\s+resizableWidth\b/)
+    ).toMatch(/<ConversationShell\s+resizableWidth\s/)
     expect(
       read("src/components/canvas/canvas-conversation-surface.tsx")
     ).not.toContain("resizableWidth")

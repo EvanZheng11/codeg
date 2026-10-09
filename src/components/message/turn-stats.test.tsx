@@ -65,27 +65,35 @@ describe("TurnStats jump-to-previous-user gating", () => {
 })
 
 describe("TurnStats jump-to-previous-user scrolling", () => {
-  function renderWithScroll(animations: boolean) {
+  /** `animations` undefined renders with no provider at all (the default). */
+  function renderWithScroll(animations?: boolean) {
     const scrollToIndex = vi.fn()
+    const stats = (
+      <NextIntlClientProvider locale="en" messages={enMessages}>
+        <MessageScrollProvider value={{ scrollToIndex }}>
+          <TurnStats
+            copyText="hello"
+            duration_ms={42_000}
+            previousUserIndex={3}
+            usage={null}
+          />
+        </MessageScrollProvider>
+      </NextIntlClientProvider>
+    )
     render(
-      <ChatAnimationsContext.Provider value={animations}>
-        <NextIntlClientProvider locale="en" messages={enMessages}>
-          <MessageScrollProvider value={{ scrollToIndex }}>
-            <TurnStats
-              copyText="hello"
-              duration_ms={42_000}
-              previousUserIndex={3}
-              usage={null}
-            />
-          </MessageScrollProvider>
-        </NextIntlClientProvider>
-      </ChatAnimationsContext.Provider>
+      animations === undefined ? (
+        stats
+      ) : (
+        <ChatAnimationsContext.Provider value={animations}>
+          {stats}
+        </ChatAnimationsContext.Provider>
+      )
     )
     return scrollToIndex
   }
 
   it("glides to the previous user message by default", async () => {
-    const scrollToIndex = renderWithScroll(true)
+    const scrollToIndex = renderWithScroll()
     await userEvent.click(screen.getByLabelText(jumpLabel))
     expect(scrollToIndex).toHaveBeenCalledWith(3, {
       align: "start",
