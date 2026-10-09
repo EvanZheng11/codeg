@@ -1,4 +1,4 @@
-import { act, render, screen } from "@testing-library/react"
+import { act, fireEvent, render, screen } from "@testing-library/react"
 import { NextIntlClientProvider } from "next-intl"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -117,5 +117,45 @@ describe("DelegationAgentDefaultsPanel probes", () => {
     expect(
       screen.getByText(`Agent default: ${first} effort`)
     ).toBeInTheDocument()
+  })
+
+  /** A tab served from the cache must not be overwritten by the answer of a
+   *  probe the user already left — that answer is another agent's options. */
+  it("drops a probe answer that lands after a cache hit replaced it", async () => {
+    const claudeModel = `claude-${unique()}`
+    let answerCodex: (snapshot: AgentOptionsSnapshot) => void = () => {}
+    describeAgentOptions.mockImplementation((agent: AgentType) =>
+      agent === "codex"
+        ? new Promise<AgentOptionsSnapshot>((resolve) => {
+            answerCodex = resolve
+          })
+        : Promise.resolve(answer(claudeModel))
+    )
+
+    render(panel({ claude_code: { config_values: { model: claudeModel } } }))
+    await settle()
+    expect(
+      screen.getByText(`Agent default: ${claudeModel} effort`)
+    ).toBeInTheDocument()
+
+    // Codex's probe is still running when the user goes back to Claude Code,
+    // whose snapshot is cached.
+    fireEvent.click(screen.getByRole("tab", { name: "Codex" }))
+    await settle()
+    expect(describeAgentOptions).toHaveBeenLastCalledWith("codex", null, null)
+    fireEvent.click(screen.getByRole("tab", { name: "Claude Code" }))
+    await settle()
+    expect(
+      screen.getByText(`Agent default: ${claudeModel} effort`)
+    ).toBeInTheDocument()
+
+    await act(async () => {
+      answerCodex(answer("codex"))
+      await vi.advanceTimersByTimeAsync(0)
+    })
+    expect(
+      screen.getByText(`Agent default: ${claudeModel} effort`)
+    ).toBeInTheDocument()
+    expect(screen.queryByText("Agent default: codex effort")).toBeNull()
   })
 })

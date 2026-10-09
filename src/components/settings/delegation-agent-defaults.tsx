@@ -149,6 +149,10 @@ export function DelegationAgentDefaultsPanel({
 
   const loadSnapshot = useCallback(
     async (agent: AgentType, model: string | null, force: boolean) => {
+      // Bump FIRST so a cache hit also invalidates a probe still in flight for
+      // the previous (agent, model) — otherwise that probe's late answer would
+      // replace the snapshot just shown for the current one.
+      const reqId = ++reqIdRef.current
       if (!force) {
         const cached = readCache(agent, model)
         if (cached) {
@@ -158,7 +162,6 @@ export function DelegationAgentDefaultsPanel({
           return
         }
       }
-      const reqId = ++reqIdRef.current
       setLoading(true)
       setError(null)
       setLoaded(null)
