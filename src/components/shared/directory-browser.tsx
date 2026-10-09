@@ -181,6 +181,18 @@ export const DirectoryBrowser = forwardRef<
       sessionGen.current += 1
     }
   }, [active])
+  // A host can also unmount the panel without ever flipping `active`: the
+  // workspace dialog moves on to its next step when a row is double-clicked.
+  // `sessionGen` never hears of that, yet a folder created or a listing loaded
+  // afterwards must not reach the host either: its `onValueChange` would land
+  // in whatever the host shows by then, a newer picker included.
+  const mountedRef = useRef(true)
+  useIsomorphicLayoutEffect(() => {
+    mountedRef.current = true
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
   // Monotonic navigation id. Each navigateTo() bumps it and the open-time init()
   // captures it, so within a single session a slower earlier navigation (or a
   // late init) can't overwrite the destination of a newer one — the latest user
@@ -245,8 +257,14 @@ export const DirectoryBrowser = forwardRef<
       const seq = (navSeq.current += 1)
       const result = await loadEntries(path)
       // Discard if a newer navigation started, or the load outlived its session
-      // (hide/show), so the most recent navigation wins.
-      if (gen !== sessionGen.current || seq !== navSeq.current) return
+      // (hide/show) or the panel itself, so the most recent navigation wins.
+      if (
+        gen !== sessionGen.current ||
+        seq !== navSeq.current ||
+        !mountedRef.current
+      ) {
+        return
+      }
       if (result !== null) {
         setRootPath(path)
         onValueChange(path)
@@ -396,7 +414,8 @@ export const DirectoryBrowser = forwardRef<
       setNewFolder((prev) => prev && { ...prev, error: message, busy: false })
       return
     }
-    if (gen !== sessionGen.current) return
+    // From here on the host hears of it, so a panel that is gone stays quiet.
+    if (gen !== sessionGen.current || !mountedRef.current) return
     // Every cached listing that could show the parent is now stale (its rows,
     // and its chevron one level up), so start the cache over.
     setEntries(new Map())
