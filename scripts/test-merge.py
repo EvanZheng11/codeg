@@ -45,7 +45,7 @@ with tempfile.TemporaryDirectory(prefix="codeg-merge-test-") as directory:
     git(client, "config", "user.email", "merge-test@example.invalid")
     for remote, url in (
         (upstream, "https://github.com/spacering-net/codeg.git"),
-        (fork, "https://github.com/EvanZheng11/codeg.git"),
+        (fork, "https://github.com/EvanZheng11/codeg"),
     ):
         git(client, "config", f"url.{remote}.insteadOf", url)
     shutil.copyfile(SCRIPT, client / "merge.sh")

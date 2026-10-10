@@ -5,7 +5,7 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")"
 UPSTREAM_URL="https://github.com/spacering-net/codeg.git"
-FORK_URL="https://github.com/EvanZheng11/codeg.git"
+FORK_URL="https://github.com/EvanZheng11/codeg"
 
 if [[ "$(git branch --show-current)" != "main" ]]; then
   echo "请先切换到 main 分支，再执行 ./merge.sh。" >&2
