@@ -1802,8 +1802,25 @@
     flex-basis 240ms ease-out;
 }
 
+/* The top strips' corner reserves (`ChromeReserve`) slide with the side
+   panels: a reserve that snapped in/out while its column was still sliding
+   made the tabs jump by the reserve's width and then slide back. Descendant
+   (not child) selector, since the reserves sit deep inside the shell's panels
+   — so it is pinned to the HORIZONTAL (sidebar/aux) group: the nested vertical
+   (terminal) group carries the same class while it slides, and no reserve
+   follows the terminal. Timing pinned to the panels' by
+   chrome-reserve-slide-source.test.ts. */
+.panel-slide-animating[data-panel-group-direction="horizontal"]
+  .chrome-reserve {
+  transition: width 240ms ease-out;
+}
+
+/* The reserve selector is repeated in full: a shorter one would lose to the
+   rule above on specificity and leave the reserves sliding. */
 @media (prefers-reduced-motion: reduce) {
-  .panel-slide-animating > [data-panel] {
+  .panel-slide-animating > [data-panel],
+  .panel-slide-animating[data-panel-group-direction="horizontal"]
+    .chrome-reserve {
     transition: none;
   }
 }
