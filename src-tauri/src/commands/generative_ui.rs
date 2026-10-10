@@ -698,6 +698,18 @@ mod tests {
         assert!(SKILL_MD.starts_with("---\nname: json-render\ndescription: "));
     }
 
+    /// Every platform ships the bytes `skill.ts` generates. A Windows checkout
+    /// converts text to CRLF by default (`core.autocrlf`), which `include_str!`
+    /// would compile in as is; `.gitattributes` pins `genui/` to LF.
+    #[test]
+    fn the_bundled_skill_has_lf_line_endings() {
+        assert!(
+            !SKILL_MD.contains('\r'),
+            "genui/json-render/SKILL.md was checked out with CRLF; check the \
+             `eol=lf` rule for it in .gitattributes"
+        );
+    }
+
     #[tokio::test]
     async fn save_persists_and_broadcasts() {
         let fx = Fixture::new();
