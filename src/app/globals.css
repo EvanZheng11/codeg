@@ -9,6 +9,10 @@
 @import "@fontsource-variable/fira-code";
 @import "@fontsource-variable/geist-mono";
 @custom-variant dark (&:is(.dark *));
+/* json-render's shadcn components (the cards in components/message/
+   json-render-block.tsx) carry their Tailwind classes in node_modules, which
+   Tailwind v4 does not scan. */
+@source "../../node_modules/@json-render/shadcn/dist";
 
 :root {
   /* 默认界面字体 = Inter（与 DEFAULT_UI_FONT_ID = "inter" 一致，须等于

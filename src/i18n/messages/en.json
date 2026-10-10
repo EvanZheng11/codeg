@@ -4524,6 +4524,7 @@
       "experts": "Experts",
       "science": "Science",
       "office": "Office Tools",
+      "ui": "UI",
       "custom": "Custom"
     },
     "actions": {
@@ -4532,6 +4533,18 @@
     },
     "toasts": {
       "openFolderFailed": "Failed to open folder"
+    }
+  },
+  "GenerativeUiSettings": {
+    "loading": "Loading…",
+    "switchLabel": "Generative UI (json-render)",
+    "switchDescription": "When on, agents Codeg starts get the json-render skill, and spec code blocks in their replies render as interactive cards.",
+    "usage": "Type /json-render followed by your request, for example /json-render list the changed files as a table. In Codex, use $json-render. You can also just ask the agent to show something as cards or a table.",
+    "effect": "Cards appear, or turn back into code blocks, right away. The skill is available in conversations started after you turn this on; turning it off removes the skill from every agent at once.",
+    "conflict": "Your central skills folder already has a skill of your own named json-render. Rename it on the Custom tab to use the built-in one.",
+    "toasts": {
+      "saveFailed": "Couldn't save the setting",
+      "unlinkFailed": "Turned off, but json-render could not be removed from these places. Each agent's next launch tries again."
     }
   },
   "QuickMessagesSettings": {

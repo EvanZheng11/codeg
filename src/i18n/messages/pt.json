@@ -4504,6 +4504,7 @@
       "experts": "Especialistas",
       "science": "Ciência",
       "office": "Ferramentas de escritório",
+      "ui": "Interface",
       "custom": "Personalizadas"
     },
     "actions": {
@@ -4512,6 +4513,18 @@
     },
     "toasts": {
       "openFolderFailed": "Falha ao abrir a pasta"
+    }
+  },
+  "GenerativeUiSettings": {
+    "loading": "Carregando…",
+    "switchLabel": "Interface generativa (json-render)",
+    "switchDescription": "Quando ativada, os agentes iniciados pelo Codeg recebem a habilidade json-render, e os blocos de código spec nas respostas aparecem como cartões interativos.",
+    "usage": "Digite /json-render seguido do seu pedido, por exemplo /json-render mostre em uma tabela os arquivos alterados. No Codex, use $json-render. Você também pode simplesmente pedir ao agente que mostre algo em cartões ou em uma tabela.",
+    "effect": "Os cartões aparecem, ou voltam a ser blocos de código, imediatamente. A habilidade fica disponível nas conversas iniciadas depois de ativar; ao desativar, ela é removida de todos os agentes de uma vez.",
+    "conflict": "Sua pasta central de habilidades já tem uma habilidade sua chamada json-render. Renomeie-a na aba Personalizadas para usar a versão integrada.",
+    "toasts": {
+      "saveFailed": "Não foi possível salvar a configuração",
+      "unlinkFailed": "Desativada, mas não foi possível remover o json-render destes locais. Uma nova tentativa será feita na próxima vez que cada agente for iniciado."
     }
   },
   "QuickMessagesSettings": {

@@ -1136,6 +1136,10 @@ mod tauri_app {
                             &computer_tools_for_init,
                         )
                         .await;
+                        crate::commands::generative_ui::apply_persisted_generative_ui_config(
+                            &db_for_init,
+                        )
+                        .await;
                     });
 
                     // Computer use: the helper, the window table, and the two
@@ -1903,6 +1907,8 @@ mod tauri_app {
                 feedback_commands::get_feedback_settings,
                 feedback_commands::set_feedback_settings,
                 feedback_commands::submit_session_feedback,
+                crate::commands::generative_ui::get_generative_ui_settings,
+                crate::commands::generative_ui::set_generative_ui_settings,
                 question_commands::get_question_settings,
                 question_commands::set_question_settings,
                 session_info_commands::get_session_info_settings,
