@@ -176,6 +176,19 @@
       "sectionDescription": "新会话页面输入框上方显示的「代码开发 / 日常办公」快捷卡片区域。",
       "showQuickActions": "在新会话页面显示"
     },
+    "chatAnimations": {
+      "sectionTitle": "聊天区域动画",
+      "sectionDescription": "会话区域内的折叠/展开、工具调用、工作状态等动画，以及平滑滚动。关闭后界面立即更新、不再有过渡动画；加载转圈图标仍会旋转。",
+      "enable": "启用聊天区域动画"
+    },
+    "chatWidth": {
+      "sectionTitle": "聊天区域宽度",
+      "sectionDescription": "会话列与输入框的最大宽度。也可以直接拖动聊天区域左右两侧的边缘来调整。",
+      "label": "内容宽度",
+      "default": "默认（{width}px）",
+      "hint": "数值按 100% 窗口缩放计，随缩放等比变化；过宽的值会按窗口大小自动限制。",
+      "reset": "恢复默认"
+    },
     "workspaceBackground": {
       "sectionTitle": "工作区背景",
       "sectionDescription": "在整个工作区背后显示一张图片。侧栏与面板会变半透明并磨砂让图片透出，遮罩保证文字可读。",
@@ -3462,7 +3475,8 @@
         "completedAt": "完成时间",
         "jumpToPreviousUserMessage": "跳转到上一条用户消息",
         "showMore": "展开",
-        "showLess": "收起"
+        "showLess": "收起",
+        "resizeWidth": "拖动调整聊天区域宽度 · 双击恢复默认"
       },
       "liveTurnStats": {
         "thinking": "思考中...",

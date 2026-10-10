@@ -176,6 +176,19 @@
       "sectionDescription": "Las tarjetas de acceso rápido «Desarrollo de código / Ofimática» que se muestran sobre el editor en la página de nueva conversación.",
       "showQuickActions": "Mostrar en la página de nueva conversación"
     },
+    "chatAnimations": {
+      "sectionTitle": "Animaciones del chat",
+      "sectionDescription": "Animaciones de plegado/desplegado, llamadas a herramientas y estado de trabajo en el área de conversación, además del desplazamiento suave. Desactívalas para actualizaciones inmediatas. Los indicadores de carga siguen girando.",
+      "enable": "Activar las animaciones del chat"
+    },
+    "chatWidth": {
+      "sectionTitle": "Ancho del chat",
+      "sectionDescription": "Ancho máximo de la columna de conversación y del cuadro de entrada. También puedes arrastrar los bordes del chat para ajustarlo.",
+      "label": "Ancho del contenido",
+      "default": "Predeterminado ({width}px)",
+      "hint": "Medido con el zoom de ventana al 100% y escalado con él. Los valores muy grandes se limitan para caber en la ventana.",
+      "reset": "Restablecer"
+    },
     "workspaceBackground": {
       "sectionTitle": "Fondo del espacio de trabajo",
       "sectionDescription": "Muestra una imagen detrás de todo el espacio de trabajo. La barra lateral y los paneles se vuelven translúcidos y esmerilados para dejar ver la imagen, y una máscara mantiene el texto legible.",
@@ -3462,7 +3475,8 @@
         "completedAt": "Completado a las",
         "jumpToPreviousUserMessage": "Ir al mensaje del usuario",
         "showMore": "Mostrar más",
-        "showLess": "Mostrar menos"
+        "showLess": "Mostrar menos",
+        "resizeWidth": "Arrastra para cambiar el ancho del chat · doble clic para restablecer"
       },
       "liveTurnStats": {
         "thinking": "Pensando...",

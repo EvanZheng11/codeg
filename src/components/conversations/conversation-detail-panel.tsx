@@ -79,6 +79,7 @@ import { useIsMobile } from "@/hooks/use-mobile"
 import { usePlatform } from "@/hooks/use-platform"
 import { useZoomLevel } from "@/hooks/use-appearance"
 import { isDesktop } from "@/lib/platform"
+import { ChromeReserve } from "@/components/layout/chrome-reserve"
 import { leftChromeReserve, rightChromeReserve } from "@/lib/window-chrome"
 import {
   acpFork,
@@ -2239,6 +2240,7 @@ const ConversationTabView = memo(function ConversationTabView({
 
   return (
     <ConversationShell
+      resizableWidth
       getSentHistory={getSentHistory}
       topBanner={
         <>
@@ -2355,7 +2357,7 @@ const ConversationTabView = memo(function ConversationTabView({
         >
           <div className="flex min-h-full flex-col">
             <div className="flex-1" />
-            <div className="mx-auto flex w-full max-w-3xl shrink-0 flex-col gap-6 px-4 py-4">
+            <div className="mx-auto flex w-full chat-content-w shrink-0 flex-col gap-6 px-4 py-4">
               <WelcomeHero />
               <QuickActions
                 onSelect={handleQuickAction}
@@ -2438,7 +2440,7 @@ const ConversationTabView = memo(function ConversationTabView({
               />
             </div>
             <div className="flex-1" />
-            <div className="mx-auto w-full max-w-3xl shrink-0 px-4 pb-6">
+            <div className="mx-auto w-full chat-content-w shrink-0 px-4 pb-6">
               <WelcomeTip />
             </div>
           </div>
@@ -2519,9 +2521,13 @@ const GROUP_EDGE_EPSILON = 0.1
  * exactly what the unsplit strip row does: left for LeftEdgeChrome while the
  * sidebar is collapsed (the conversation column then owns the window's left
  * edge), right for RightEdgeChrome while the column owns the right edge (aux
- * panel closed + conversation mode). Mobile shows the full-width
- * FolderTitleBar instead of corner overlays — no reserve. Self-subscribed so
- * sidebar/aux/zoom toggles re-render these slivers, not the whole panel.
+ * panel closed + conversation mode). Like that row, the reserve is mounted
+ * while its column holds the corner — the right one only in conversation mode;
+ * a mode switch snaps the layout — and sized by the side panel over the corner,
+ * so a sidebar/aux toggle slides it (ChromeReserve). Mobile shows the
+ * full-width FolderTitleBar instead of corner overlays — no reserve.
+ * Self-subscribed so sidebar/aux/zoom toggles re-render these slivers, not the
+ * whole panel.
  */
 function SplitStripCornerReserve({ side }: { side: "left" | "right" }) {
   const isMobile = useIsMobile()
@@ -2531,22 +2537,16 @@ function SplitStripCornerReserve({ side }: { side: "left" | "right" }) {
   const { isMac, isWindows, isLinux } = usePlatform()
   const { zoomLevel } = useZoomLevel()
   if (isMobile) return null
+  if (side === "right" && mode !== "conversation") return null
   const width =
     side === "left"
       ? sidebarOpen
         ? 0
         : leftChromeReserve(isMac && isDesktop(), zoomLevel)
-      : !auxOpen && mode === "conversation"
-        ? rightChromeReserve(isDesktop() && (isWindows || isLinux), zoomLevel)
-        : 0
-  if (width <= 0) return null
-  return (
-    <div
-      data-tauri-drag-region
-      className="h-full shrink-0 ws-strip-line"
-      style={{ width }}
-    />
-  )
+      : auxOpen
+        ? 0
+        : rightChromeReserve(isDesktop() && (isWindows || isLinux), zoomLevel)
+  return <ChromeReserve width={width} />
 }
 
 export function ConversationDetailPanel() {

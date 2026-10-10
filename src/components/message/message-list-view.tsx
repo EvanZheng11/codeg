@@ -89,6 +89,7 @@ import {
 import type { MessageScrollContextValue } from "@/components/message/message-scroll-context"
 import { extractSessionFilesGrouped } from "@/lib/session-files"
 import { useModelLabels } from "@/hooks/use-model-labels"
+import { useChatAnimationsEnabled } from "@/hooks/use-appearance"
 import { usePageHandoffName } from "@/lib/browser/use-page-handoff-name"
 import { unescapeComposerText } from "@/lib/composer-copy-text"
 import { useStickToBottomContext } from "use-stick-to-bottom"
@@ -1066,20 +1067,24 @@ const AutoScrollOnSend = memo(function AutoScrollOnSend({
   signal: number
 }) {
   const { scrollToBottom } = useStickToBottomContext()
+  const chatAnimations = useChatAnimationsEnabled()
   const lastSignalRef = useRef(signal)
 
   useEffect(() => {
     if (signal === lastSignalRef.current) return
     lastSignalRef.current = signal
 
-    scrollToBottom()
+    const options = chatAnimations
+      ? undefined
+      : { animation: "instant" as const }
+    scrollToBottom(options)
     const rafId = requestAnimationFrame(() => {
-      scrollToBottom()
+      scrollToBottom(options)
     })
     return () => {
       cancelAnimationFrame(rafId)
     }
-  }, [scrollToBottom, signal])
+  }, [scrollToBottom, signal, chatAnimations])
 
   return null
 })
@@ -1163,6 +1168,7 @@ export function MessageListView({
     refetchDetail(conversationId, { preserveLive: true })
   }, [refetchDetail, conversationId])
 
+  const chatAnimations = useChatAnimationsEnabled()
   const shouldUseSmoothResize = !(
     isActive &&
     !detailLoading &&
@@ -1680,11 +1686,17 @@ export function MessageListView({
     <SessionViewerHost>
       <div
         ref={selectionBoxRef}
-        className="relative flex h-full min-h-0 flex-col"
+        className="chat-motion-scope relative flex h-full min-h-0 flex-col"
       >
         <MessageThread
           className="flex-1 min-h-0"
-          resize={shouldUseSmoothResize ? "smooth" : undefined}
+          resize={
+            !chatAnimations
+              ? "instant"
+              : shouldUseSmoothResize
+                ? "smooth"
+                : undefined
+          }
         >
           <AutoScrollOnSend signal={sendSignal} />
           <VirtualizedMessageThread
