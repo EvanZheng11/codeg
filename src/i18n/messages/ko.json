@@ -176,6 +176,19 @@
       "sectionDescription": "새 대화 페이지에서 입력창 위에 표시되는 '코드 개발 / 일상 업무' 바로가기 카드입니다.",
       "showQuickActions": "새 대화 페이지에 표시"
     },
+    "chatAnimations": {
+      "sectionTitle": "채팅 애니메이션",
+      "sectionDescription": "대화 영역의 접기/펼치기, 도구 호출, 작업 상태 등의 애니메이션과 부드러운 스크롤을 제어합니다. 끄면 즉시 갱신됩니다. 스피너는 계속 회전합니다.",
+      "enable": "채팅 애니메이션 사용"
+    },
+    "chatWidth": {
+      "sectionTitle": "채팅 너비",
+      "sectionDescription": "대화 영역과 입력창의 최대 너비입니다. 채팅 영역의 좌우 가장자리를 드래그해서 조정할 수도 있습니다.",
+      "label": "콘텐츠 너비",
+      "default": "기본값({width}px)",
+      "hint": "값은 창 확대/축소 100% 기준이며 배율에 따라 함께 조정됩니다. 너무 넓은 값은 창 크기에 맞게 자동으로 제한됩니다.",
+      "reset": "기본값으로 재설정"
+    },
     "workspaceBackground": {
       "sectionTitle": "작업 공간 배경",
       "sectionDescription": "작업 공간 전체 뒤에 이미지를 표시합니다. 사이드바와 패널이 반투명 유리 효과로 바뀌어 이미지가 비쳐 보이며, 마스크가 텍스트 가독성을 유지합니다.",
@@ -3462,7 +3475,8 @@
         "completedAt": "완료 시각",
         "jumpToPreviousUserMessage": "이전 사용자 메시지로 이동",
         "showMore": "더보기",
-        "showLess": "접기"
+        "showLess": "접기",
+        "resizeWidth": "드래그하여 채팅 너비 조정 · 더블 클릭하여 초기화"
       },
       "liveTurnStats": {
         "thinking": "생각 중...",
