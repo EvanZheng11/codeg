@@ -391,6 +391,13 @@ const ACP_ADAPTER_DOCS_URL: &str = "https://docs.codeg.app/guide/supported-agent
 /// `src/lib/pi-config.ts`, held equal by a test).
 pub const PI_MIN_RUNTIME_VERSION: &str = "0.81.0";
 
+/// The npm package the built-in Claude Code entry runs — and the name the
+/// adapter reports as `agentInfo.name` at `initialize`, which is its
+/// `packageJson.name` (read from the 0.58.1 to 0.88.0 sources). A custom agent
+/// whose running adapter reports exactly this name follows the Claude Code
+/// steering policy (`connection.rs::steering_policy_agent`).
+pub const CLAUDE_AGENT_ACP_PACKAGE: &str = "@agentclientprotocol/claude-agent-acp";
+
 /// Minimum adapter version whose `_session/steering` honors the
 /// `_meta.steering.idleBehavior = "promptRequired"` opt-in — one of the three
 /// gates for codeg's NATIVE live-feedback push channel (synthesized into
@@ -1841,7 +1848,9 @@ pub fn get_agent_meta(agent_type: AgentType) -> AcpAgentMeta {
             // a tool, the CLI folds the prompt into the running turn and
             // answers it with that turn's result. The transcript records the
             // prompt as a `queued_command` attachment, which `parsers::claude`
-            // already renders as a user turn. 0.86.0 took the result for an
+            // renders as a user turn (`queued_human_prompt`) and the background
+            // watcher matches against the prompts codeg sent, so the rest of
+            // the turn stays off the overlay. 0.86.0 took the result for an
             // autonomous one and left the prompt open: measured, no answer in
             // 45 s, so codeg's turn kept spinning. 0.88.0 settles it
             // (`end_turn`, 4.8 s after the send). A prompt that arrives while
@@ -4224,6 +4233,20 @@ mod tests {
         ] {
             assert_eq!(steering_prompt_required_min_version(agent), None);
         }
+    }
+
+    #[test]
+    fn claude_agent_acp_package_is_the_package_claude_code_pins() {
+        // A custom agent gets the Claude Code steering policy when its adapter
+        // reports exactly this name, so the name must stay the package the
+        // built-in entry actually runs.
+        let AgentDistribution::Npx {
+            package, version, ..
+        } = get_agent_meta(AgentType::ClaudeCode).distribution
+        else {
+            panic!("Claude Code is an npx agent");
+        };
+        assert_eq!(package, format!("{CLAUDE_AGENT_ACP_PACKAGE}@{version}"));
     }
 
     #[test]

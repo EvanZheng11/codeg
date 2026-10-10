@@ -1630,6 +1630,26 @@ async fn record_prompt(agent_type: AgentType, session_id: &str, blocks: &[Conten
     let _ = tokio::time::timeout(std::time::Duration::from_millis(2000), ack).await;
 }
 
+/// Record a message delivered into a custom agent's running turn (a native
+/// steer), and wait (briefly) for it to land. No-op for agents with their own
+/// store.
+///
+/// The adapter keeps a steer to itself — no `user_message_chunk` echoes it — so
+/// codeg's transcript, which IS a custom agent's history, would otherwise never
+/// hold it: the reply to the steer would glue onto the reply before it, and the
+/// message would vanish once the conversation is reopened. Recorded as the
+/// prompt it is, marked so the reader knows the turn did not start there.
+async fn record_steer(agent_type: AgentType, session_id: &str, blocks: &[ContentBlock]) {
+    let Some(dir) = transcript_dir_for(agent_type) else {
+        return;
+    };
+    let Ok(payload) = serde_json::to_value(blocks) else {
+        return;
+    };
+    let ack = crate::acp_transcript::record_steer(dir, session_id, payload);
+    let _ = tokio::time::timeout(std::time::Duration::from_millis(2000), ack).await;
+}
+
 /// Record a turn's completion for a custom agent, and wait (briefly) for it to
 /// land. No-op for agents with their own store.
 ///
@@ -6396,11 +6416,16 @@ async fn run_connection(
             // connection will receive.
             let codex_user_input_shape =
                 codex_user_input_shape(agent_type, init_resp.agent_info.as_ref());
+            let steering_policy =
+                steering_policy_agent(agent_type, init_resp.agent_info.as_ref());
             tracing::info!(
-                "[ACP][{}] steering: advertised={}, agent_version={:?}, native={}",
+                "[ACP][{}] steering: advertised={}, agent={:?}, agent_version={:?}, policy={}{}, native={}",
                 agent_type,
                 steering_advertised,
+                init_resp.agent_info.as_ref().map(|i| i.name.as_str()),
                 init_resp.agent_info.as_ref().map(|i| i.version.as_str()),
+                steering_policy,
+                if steering_policy == agent_type { "" } else { " (by agent name)" },
                 native_steering_available
             );
 
@@ -11832,14 +11857,18 @@ async fn run_conversation_loop(
                                     }
                                     let outcome = send_steer_request(&cx, &sid, &blocks).await;
                                     // A steered message still lands in the
-                                    // agent's OWN transcript as a user record,
-                                    // which `group_into_turns` reads as the
-                                    // start of a turn. Fingerprint it so the
-                                    // background watcher classifies that turn
-                                    // as wire-rendered foreground: the owning
-                                    // prompt stays in flight across the steered
-                                    // work (claude-agent-acp #958), so all of
-                                    // it already streams into the live turn —
+                                    // agent's OWN transcript: as a user record
+                                    // when it runs as a turn of its own, and as
+                                    // a `queued_command` attachment when the
+                                    // CLI folds it into the running turn
+                                    // (`parsers::claude::queued_human_prompt`).
+                                    // Fingerprint it so the background watcher
+                                    // classifies that turn, or the rest of the
+                                    // turn it was folded into, as wire-rendered
+                                    // foreground: the owning prompt stays in
+                                    // flight across the steered work
+                                    // (claude-agent-acp #958), so all of it
+                                    // already streams into the live turn —
                                     // surfacing it as overlay activity too
                                     // renders it twice and reorders the
                                     // transcript as the upserts land.
@@ -11855,6 +11884,19 @@ async fn run_conversation_loop(
                                     // can surface at all.
                                     if matches!(outcome, Ok(SteerOutcome::Injected)) {
                                         prompt_ledger.record_prompt_blocks(&blocks);
+                                        // A custom agent's history is codeg's
+                                        // own transcript, and only codeg knows
+                                        // the steer happened (see
+                                        // `record_steer`). Recorded in the
+                                        // encoding it went out in, and before
+                                        // the reply, so every frame this loop
+                                        // takes in from here on lands after it.
+                                        record_steer(
+                                            agent_type,
+                                            &sid.0,
+                                            &map_prompt_blocks(blocks.clone()),
+                                        )
+                                        .await;
                                     }
                                     let _ = reply.send(outcome);
                                 }
@@ -14638,7 +14680,7 @@ fn steering_version_ok(agent_info: Option<&agent_client_protocol::schema::v1::Im
 
 /// Synthesize `SessionState.native_steering_available` from an `initialize`
 /// response: extension advertised (top-level `_meta`) AND registry policy says
-/// this agent type honors `promptRequired` AND the running binary's
+/// this agent honors `promptRequired` AND the running binary's
 /// `agent_info.version` proves it. Pure so the full gate matrix is unit-tested;
 /// `run_connection` calls it once and everything downstream reads the stored
 /// bool.
@@ -14648,8 +14690,35 @@ fn synthesize_native_steering(
     agent_info: Option<&agent_client_protocol::schema::v1::Implementation>,
 ) -> bool {
     init_advertises_steering(meta)
-        && registry::steering_prompt_required_min_version(agent_type)
-            .is_some_and(|min| steering_version_ok(agent_info, min))
+        && registry::steering_prompt_required_min_version(steering_policy_agent(
+            agent_type, agent_info,
+        ))
+        .is_some_and(|min| steering_version_ok(agent_info, min))
+}
+
+/// Whose steering policy a connection follows. A custom agent whose running
+/// adapter reports itself as claude-agent-acp (a second Claude Code account
+/// registered as a custom npx agent, say) speaks exactly the protocol the
+/// built-in Claude Code policy was written for, so it follows that policy; the
+/// advertisement and the version floor still gate it as they gate the built-in
+/// agent. The name must match exactly — a fork or a look-alike has no policy
+/// and keeps the pull channel — and a built-in type is never remapped.
+///
+/// Only the steering channel changes for such an agent: its history is still
+/// the transcript codeg records, which is why an injected steer is recorded
+/// there (see the `Steer` arm).
+fn steering_policy_agent(
+    agent_type: AgentType,
+    agent_info: Option<&agent_client_protocol::schema::v1::Implementation>,
+) -> AgentType {
+    match agent_type {
+        AgentType::Custom(_)
+            if agent_info.is_some_and(|info| info.name == registry::CLAUDE_AGENT_ACP_PACKAGE) =>
+        {
+            AgentType::ClaudeCode
+        }
+        other => other,
+    }
 }
 
 /// codex-acp 1.12.0 swapped the question and the short tab header between a
@@ -20027,6 +20096,65 @@ mod tests {
             None,
             Some(&proven)
         ));
+    }
+
+    /// #892: a custom entry running claude-agent-acp (a second Claude account,
+    /// say) follows the Claude Code policy, picked by the name its running
+    /// adapter reports; the advertisement and the version floor gate it as
+    /// they gate the built-in agent.
+    #[test]
+    fn a_custom_agent_running_claude_agent_acp_steers_natively() {
+        use agent_client_protocol::schema::v1::Implementation;
+        let advertised = meta_map(serde_json::json!({"steering": {"supported": true}}));
+        let claude = Implementation::new(registry::CLAUDE_AGENT_ACP_PACKAGE, "0.85.1");
+        let claude_stale = Implementation::new(registry::CLAUDE_AGENT_ACP_PACKAGE, "0.64.1");
+        let custom = AgentType::Custom("claude-code-2");
+
+        assert!(synthesize_native_steering(
+            custom,
+            Some(&advertised),
+            Some(&claude)
+        ));
+        assert_eq!(
+            steering_policy_agent(custom, Some(&claude)),
+            AgentType::ClaudeCode
+        );
+        // The floor still holds, and so do the advertisement and the proof.
+        assert!(!synthesize_native_steering(
+            custom,
+            Some(&advertised),
+            Some(&claude_stale)
+        ));
+        assert!(!synthesize_native_steering(custom, None, Some(&claude)));
+        assert!(!synthesize_native_steering(custom, Some(&advertised), None));
+        // Only the exact name: another adapter, or a look-alike without the
+        // scope, keeps the pull channel.
+        for name in [
+            "acme-acp",
+            "claude-agent-acp",
+            "@agentclientprotocol/claude-agent-acp-fork",
+        ] {
+            let other = Implementation::new(name, "0.85.1");
+            assert!(
+                !synthesize_native_steering(custom, Some(&advertised), Some(&other)),
+                "{name}"
+            );
+            assert_eq!(
+                steering_policy_agent(custom, Some(&other)),
+                custom,
+                "{name}"
+            );
+        }
+        // A built-in type is never remapped by what its adapter reports.
+        assert!(!synthesize_native_steering(
+            AgentType::Codex,
+            Some(&advertised),
+            Some(&claude)
+        ));
+        assert_eq!(
+            steering_policy_agent(AgentType::Codex, Some(&claude)),
+            AgentType::Codex
+        );
     }
 
     #[test]
@@ -33579,6 +33707,9 @@ mod tests {
         seen: Vec<AcpEvent>,
         unprompted: tokio::sync::mpsc::UnboundedSender<Vec<GrokFrame>>,
         respond: Arc<tokio::sync::Notify>,
+        /// What the agent answers the next `_session/steering` requests with,
+        /// in order; `injected` once these run out.
+        steer_outcomes: Arc<std::sync::Mutex<VecDeque<serde_json::Value>>>,
         client: tokio::task::JoinHandle<()>,
         agent: tokio::task::JoinHandle<()>,
     }
@@ -33591,6 +33722,8 @@ mod tests {
             let turns = Arc::new(std::sync::Mutex::new(VecDeque::from(turns)));
             let respond = Arc::new(tokio::sync::Notify::new());
             let agent_respond = Arc::clone(&respond);
+            let steer_outcomes = Arc::new(std::sync::Mutex::new(VecDeque::new()));
+            let agent_steer_outcomes = Arc::clone(&steer_outcomes);
             let (unprompted, mut unprompted_rx) =
                 tokio::sync::mpsc::unbounded_channel::<Vec<GrokFrame>>();
             let (client_end, agent_end) = agent_client_protocol::Channel::duplex();
@@ -33620,6 +33753,19 @@ mod tests {
                                 responder.respond(PromptResponse::new(StopReason::EndTurn))
                             });
                             Ok(())
+                        },
+                        on_receive_request!(),
+                    )
+                    .on_receive_request(
+                        async move |_req: TestSteeringRequest,
+                                    responder: Responder<serde_json::Value>,
+                                    _cx: ConnectionTo<Client>| {
+                            let outcome = agent_steer_outcomes
+                                .lock()
+                                .unwrap()
+                                .pop_front()
+                                .unwrap_or_else(|| serde_json::json!({"outcome": "injected"}));
+                            responder.respond(outcome)
                         },
                         on_receive_request!(),
                     )
@@ -33687,6 +33833,7 @@ mod tests {
                 seen: Vec::new(),
                 unprompted,
                 respond,
+                steer_outcomes,
                 client,
                 agent,
             }
@@ -33701,6 +33848,12 @@ mod tests {
         /// `send_prompt_inner` does, wait until `last_text` has been read
         /// inside the turn, then release the response and wait for the end.
         async fn run_turn(&mut self, prompt: &str, last_text: &str) {
+            self.open_turn(prompt, last_text).await;
+            self.close_turn().await;
+        }
+
+        /// The first half of [`Self::run_turn`]: the turn stays open.
+        async fn open_turn(&mut self, prompt: &str, last_text: &str) {
             self.state.write().await.turn_in_flight = true;
             self.cmd_tx
                 .send(ConnectionCommand::Prompt {
@@ -33711,16 +33864,37 @@ mod tests {
                 })
                 .await
                 .expect("the loop is running");
-            self.until(
-                "the turn's reply",
-                |e| matches!(e, AcpEvent::ContentDelta { text, .. } if text == last_text),
-            )
-            .await;
+            self.until_text(last_text).await;
+        }
+
+        /// The second half of [`Self::run_turn`].
+        async fn close_turn(&mut self) {
             self.respond.notify_one();
             self.until("the turn end", |e| {
                 matches!(e, AcpEvent::TurnComplete { .. })
             })
             .await;
+        }
+
+        async fn until_text(&mut self, text: &str) -> usize {
+            self.until(
+                "the reply",
+                |e| matches!(e, AcpEvent::ContentDelta { text: delta, .. } if delta == text),
+            )
+            .await
+        }
+
+        /// Steer the running turn the way `submit_feedback_native` does.
+        async fn steer(&self, text: &str) -> Result<SteerOutcome, AcpError> {
+            let (reply, outcome) = oneshot::channel();
+            self.cmd_tx
+                .send(ConnectionCommand::Steer {
+                    blocks: vec![PromptInputBlock::Text { text: text.into() }],
+                    reply,
+                })
+                .await
+                .expect("the loop is running");
+            outcome.await.expect("the loop answers")
         }
 
         /// Record events until one matches, and return its index in `seen`.
@@ -33763,8 +33937,6 @@ mod tests {
     /// ends (or the conversation is reopened).
     #[tokio::test]
     async fn a_turn_a_custom_agent_runs_on_its_own_stays_in_its_history() {
-        use crate::parsers::AgentParser as _;
-
         let home = tempfile::tempdir().expect("tempdir");
         let home_str = home.path().to_string_lossy().into_owned();
         // The recorder resolves its root from the process-global `CODEG_HOME`;
@@ -33812,33 +33984,7 @@ mod tests {
             // history.
             lp.run_turn("thanks", "You're welcome.").await;
             lp.shutdown().await;
-
-            // Everything above went through the one writer thread, which takes
-            // its queue in order and writes a turn end before the next job, so
-            // a turn end queued after them lands only once they have. Waiting
-            // for that one with room for a stalled CI runner — the loop's own
-            // wait on its turn end gives up after 2s — is what lets the read
-            // below see the whole file.
-            let root = crate::paths::codeg_acp_transcripts_root();
-            let barrier = crate::acp_transcript::record_entry_in(
-                &root,
-                IDLE_PROBE_AGENT,
-                "writer-barrier",
-                crate::acp_transcript::EntryKind::TurnEnd,
-                serde_json::json!({"stopReason": "end_turn"}),
-            );
-            tokio::time::timeout(std::time::Duration::from_secs(30), barrier)
-                .await
-                .expect("the transcript writer kept up")
-                .expect("the barrier record landed");
-
-            crate::parsers::acp_native::AcpNativeParser::new_in(
-                AgentType::custom(IDLE_PROBE_AGENT).expect("a valid custom id"),
-                root,
-            )
-            .get_conversation("s1")
-            .expect("the session has a transcript")
-            .turns
+            recorded_custom_turns().await
         })
         .await;
 
@@ -33851,6 +33997,130 @@ mod tests {
                 r#"User: text "thanks""#,
                 r#"Assistant: text "You're welcome.""#,
             ]
+        );
+    }
+
+    /// Wait until everything the probe session recorded is on disk, then
+    /// rebuild its history the way a reopened conversation does.
+    ///
+    /// Everything goes through the one writer thread, which takes its queue in
+    /// order and writes a turn end before the next job, so a turn end queued
+    /// after the session's records lands only once they have. Waiting for that
+    /// one with room for a stalled CI runner — the loop's own wait on its turn
+    /// end gives up after 2s — is what lets the read see the whole file.
+    async fn recorded_custom_turns() -> Vec<crate::models::message::MessageTurn> {
+        use crate::parsers::AgentParser as _;
+
+        let root = crate::paths::codeg_acp_transcripts_root();
+        let barrier = crate::acp_transcript::record_entry_in(
+            &root,
+            IDLE_PROBE_AGENT,
+            "writer-barrier",
+            crate::acp_transcript::EntryKind::TurnEnd,
+            serde_json::json!({"stopReason": "end_turn"}),
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(30), barrier)
+            .await
+            .expect("the transcript writer kept up")
+            .expect("the barrier record landed");
+
+        crate::parsers::acp_native::AcpNativeParser::new_in(
+            AgentType::custom(IDLE_PROBE_AGENT).expect("a valid custom id"),
+            root,
+        )
+        .get_conversation("s1")
+        .expect("the session has a transcript")
+        .turns
+    }
+
+    /// #892: a custom agent running claude-agent-acp steers natively now, and
+    /// the adapter keeps a steer to itself — no user chunk echoes it. codeg's
+    /// transcript is the whole of such an agent's history, so the loop records
+    /// the steer there: once reopened, the conversation shows it as the user
+    /// turn the live view drew, between the two parts of the reply, and the
+    /// card the first part opened carries the update that came after the
+    /// steer. A steer the agent did not take in is not recorded.
+    #[tokio::test]
+    async fn a_steer_a_custom_agent_takes_in_stays_in_its_history() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let home_str = home.path().to_string_lossy().into_owned();
+        let (turns, transcript) =
+            temp_env::async_with_vars([("CODEG_HOME", Some(home_str.as_str()))], async {
+                let mut lp = CustomLoop::start(vec![vec![
+                    custom_update(serde_json::json!({
+                        "sessionUpdate": "tool_call",
+                        "toolCallId": "job-1",
+                        "title": "Bash",
+                        "kind": "execute",
+                        "status": "in_progress",
+                        "rawInput": {"command": "pnpm build"},
+                    })),
+                    custom_text("Building the page."),
+                ]])
+                .await;
+                lp.steer_outcomes.lock().unwrap().extend([
+                    serde_json::json!({"outcome": "promptRequired"}),
+                    serde_json::json!({"outcome": "startedNewTurn"}),
+                    serde_json::json!({"outcome": "bogus"}),
+                ]);
+
+                lp.open_turn("build the page", "Building the page.").await;
+                assert!(matches!(
+                    lp.steer("not taken in").await,
+                    Ok(SteerOutcome::PromptRequired)
+                ));
+                assert!(matches!(
+                    lp.steer("detached").await,
+                    Ok(SteerOutcome::StartedNewTurn)
+                ));
+                assert!(lp.steer("garbled").await.is_err());
+                assert!(matches!(
+                    lp.steer("make it blue").await,
+                    Ok(SteerOutcome::Injected)
+                ));
+                lp.agent_sends(vec![
+                    custom_update(serde_json::json!({
+                        "sessionUpdate": "tool_call_update",
+                        "toolCallId": "job-1",
+                        "status": "completed",
+                        "content": [{"type": "content", "content": {"type": "text", "text": "built"}}],
+                    })),
+                    custom_text("Blue it is."),
+                ]);
+                lp.until_text("Blue it is.").await;
+                lp.close_turn().await;
+                lp.shutdown().await;
+
+                let turns = recorded_custom_turns().await;
+                let transcript = std::fs::read_to_string(
+                    crate::paths::codeg_acp_transcripts_root()
+                        .join(IDLE_PROBE_AGENT)
+                        .join("s1.jsonl"),
+                )
+                .expect("the transcript file");
+                (turns, transcript)
+            })
+            .await;
+
+        assert_eq!(
+            turn_shape(&turns),
+            vec![
+                r#"User: text "build the page""#,
+                r#"Assistant: call job-1 Bash | text "Building the page." | result job-1 "built""#,
+                r#"User: text "make it blue""#,
+                r#"Assistant: text "Blue it is.""#,
+            ]
+        );
+        let steers: Vec<serde_json::Value> = transcript
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .filter(|entry| entry.get("s") == Some(&serde_json::Value::Bool(true)))
+            .collect();
+        assert_eq!(steers.len(), 1, "{transcript}");
+        assert_eq!(steers[0]["k"], "prompt");
+        assert_eq!(
+            steers[0]["p"],
+            serde_json::json!([{"type": "text", "text": "make it blue"}])
         );
     }
 }
