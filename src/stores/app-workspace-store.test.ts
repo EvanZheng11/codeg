@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import {
   resetAppWorkspaceStore,
   useAppWorkspaceStore,
@@ -29,12 +29,14 @@ const {
   listAllFolderDetails,
   listOpenFolderDetails,
   openFolder,
+  listFolderGroups: readFolderGroups,
 } = await import("@/lib/api")
 const mockGetFolder = vi.mocked(getFolder)
 const mockGetGitHead = vi.mocked(getGitHead)
 const mockListAllFolders = vi.mocked(listAllFolderDetails)
 const mockListOpenFolders = vi.mocked(listOpenFolderDetails)
 const mockOpenFolder = vi.mocked(openFolder)
+const mockListFolderGroups = vi.mocked(readFolderGroups)
 
 function makeSummary(
   overrides: Partial<DbConversationSummary> & { id: number }
@@ -163,6 +165,82 @@ describe("openFolder — 新建与复用同一工作区目录", () => {
     expect(mockOpenFolder).toHaveBeenCalledTimes(2)
     expect(useAppWorkspaceStore.getState().folders).toEqual([detail])
     expect(useAppWorkspaceStore.getState().allFolders).toEqual([detail])
+  })
+})
+
+describe("fetchFolders — offline hydration safety", () => {
+  let errors: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    mockListOpenFolders.mockReset().mockResolvedValue([])
+    mockListAllFolders.mockReset().mockResolvedValue([])
+    mockListFolderGroups.mockReset().mockResolvedValue([])
+    errors = vi.spyOn(console, "error").mockImplementation(() => {})
+  })
+
+  afterEach(() => errors.mockRestore())
+
+  it.each(["open", "all", "groups"] as const)(
+    "keeps folders unknown when the initial %s read fails, then hydrates on recovery",
+    async (failedRead) => {
+      const reads = {
+        open: mockListOpenFolders,
+        all: mockListAllFolders,
+        groups: mockListFolderGroups,
+      }
+      reads[failedRead].mockRejectedValueOnce(new Error("remote offline"))
+
+      await useAppWorkspaceStore.getState().fetchFolders()
+
+      // TabProvider gates orphan-draft pruning on foldersHydrated. A failed
+      // snapshot must keep that gate closed, even though loading has settled.
+      expect(useAppWorkspaceStore.getState()).toMatchObject({
+        foldersLoading: false,
+        foldersHydrated: false,
+        allFolders: [],
+      })
+
+      const folder = makeFolder({ id: 1 })
+      mockListOpenFolders.mockResolvedValueOnce([folder])
+      mockListAllFolders.mockResolvedValueOnce([folder])
+      await useAppWorkspaceStore.getState().fetchFolders()
+
+      expect(useAppWorkspaceStore.getState()).toMatchObject({
+        foldersLoading: false,
+        foldersHydrated: true,
+        folders: [folder],
+        allFolders: [folder],
+      })
+    }
+  )
+
+  it("keeps the last authoritative snapshot hydrated when a refresh fails", async () => {
+    const folder = makeFolder({ id: 1 })
+    mockListOpenFolders.mockResolvedValueOnce([folder])
+    mockListAllFolders.mockResolvedValueOnce([folder])
+    await useAppWorkspaceStore.getState().fetchFolders()
+    const before = useAppWorkspaceStore.getState()
+
+    mockListAllFolders.mockRejectedValueOnce(new Error("remote offline"))
+    await useAppWorkspaceStore.getState().fetchFolders()
+
+    const after = useAppWorkspaceStore.getState()
+    expect(after.foldersLoading).toBe(false)
+    expect(after.foldersHydrated).toBe(true)
+    expect(after.folders).toBe(before.folders)
+    expect(after.allFolders).toBe(before.allFolders)
+    expect(after.folderGroups).toBe(before.folderGroups)
+  })
+
+  it("accepts a successful empty snapshot as authoritative", async () => {
+    await useAppWorkspaceStore.getState().fetchFolders()
+
+    expect(useAppWorkspaceStore.getState()).toMatchObject({
+      foldersLoading: false,
+      foldersHydrated: true,
+      folders: [],
+      allFolders: [],
+    })
   })
 })
 
